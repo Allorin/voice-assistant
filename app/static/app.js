@@ -9,6 +9,10 @@ const els = {
   micLabel: $("micLabel"), hint: $("hint"), status: $("status"), speakToggle: $("speakToggle"),
   agenda: $("agenda"), agendaList: $("agendaList"), planToggle: $("planToggle"), planClose: $("planClose"),
   toast: $("toast"), suggestions: $("suggestions"), icsCopy: $("icsCopy"),
+  settings: $("voiceSettings"), settingsOpen: $("settingsOpen"), settingsClose: $("settingsClose"),
+  voiceSelect: $("voiceSelect"), voiceRate: $("voiceRate"), voiceVolume: $("voiceVolume"),
+  rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
+  detailsEnabled: $("detailsEnabled"), voicePreview: $("voicePreview"), voiceStatus: $("voiceStatus"),
 };
 
 const store = {
@@ -19,6 +23,13 @@ const store = {
 const state = {
   sessionId: store.get("sessionId", null) || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)),
   speak: store.get("speak", true),
+  audioSettings: (() => {
+    const saved = store.get("audioSettings", {}) || {};
+    const number = (v, fallback, min, max) => typeof v === "number" && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, v)) : fallback;
+    return { voice: typeof saved.voice === "string" ? saved.voice : "", rate: number(saved.rate, 1.05, 0.7, 1.4),
+      volume: number(saved.volume, 1, 0, 1), bell: saved.bell !== false, details: saved.details !== false };
+  })(),
   listening: false,
   busy: false,
   status: null,
@@ -58,6 +69,12 @@ function renderItems(items, changed) {
     li.querySelector(".title").textContent = it.title;
     li.querySelector(".kind").textContent = it.recurrence_text && it.occurrence
       ? `${it.type_label}, ${it.recurrence_text}` : it.type_label;
+    if (it.notes || it.remind_before_min) {
+      const details = document.createElement("span");
+      details.className = "details";
+      details.textContent = [it.notes, it.remind_before_min ? `Напомнить за ${it.remind_before_min} мин.` : ""].filter(Boolean).join("\n");
+      li.appendChild(details);
+    }
     ul.appendChild(li);
   }
   return ul;
@@ -71,7 +88,8 @@ async function send(text, viaVoice = false) {
   addMessage("user", text);
   const typing = addMessage("assistant typing", "Думаю");
   try {
-    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ text, session_id: state.sessionId }) });
+    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ text, session_id: state.sessionId,
+      collect_details: state.audioSettings.details }) });
     typing.remove();
     const showItems = ["create", "update", "complete", "reopen", "search"].includes(data.intent) ? data.items : [];
     // если записи показаны карточками, из текста убираем их дубли-строки
@@ -95,26 +113,44 @@ async function send(text, viaVoice = false) {
 
 /* ---------------------------------------------------------------- озвучка */
 
-let ruVoice = null;
-function pickVoice() {
-  if (!("speechSynthesis" in window)) return;
-  const voices = speechSynthesis.getVoices().filter((v) => v.lang && v.lang.toLowerCase().startsWith("ru"));
-  ruVoice = voices.find((v) => /google|милена|milena|yandex|natural/i.test(v.name)) || voices[0] || null;
+const audio = new PlannerAudio({ getSettings: () => state.audioSettings, isEnabled: () => state.speak,
+  onError: (text) => { hint(text); els.voiceStatus.textContent = text; }, onVoicesChanged: updateVoices });
+const audioHelp = "Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.";
+
+function updateVoices() {
+  const voices = audio.voices();
+  els.voiceSelect.textContent = "";
+  els.voiceSelect.add(new Option("Автоматически · русский голос", ""));
+  for (const voice of voices) {
+    els.voiceSelect.add(new Option(`${voice.name} · ${voice.lang}`, voice.voiceURI));
+  }
+  if (voices.some((v) => v.voiceURI === state.audioSettings.voice)) els.voiceSelect.value = state.audioSettings.voice;
+  els.voiceSelect.disabled = !voices.length;
+  if (!audio.synth) els.voiceStatus.textContent = "В этом браузере нет синтеза речи. Будут доступны текстовые напоминания и колокольчик.";
+  else if (!voices.length) els.voiceStatus.textContent = audio.synth.getVoices().length
+    ? "Google русский, Microsoft Irina и Microsoft Pavel недоступны в этом браузере. Автоматический режим попробует озвучить текст по-русски."
+    : "Браузер ещё не предоставил голоса. Попробуйте прослушать пример; выбор обновится автоматически.";
+  else els.voiceStatus.textContent = audioHelp;
 }
-if ("speechSynthesis" in window) {
-  pickVoice();
-  speechSynthesis.addEventListener?.("voiceschanged", pickVoice);
+
+function syncAudioSettings() {
+  els.voiceRate.value = state.audioSettings.rate;
+  els.voiceVolume.value = Math.round(state.audioSettings.volume * 100);
+  els.rateValue.textContent = `${state.audioSettings.rate.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}×`;
+  els.volumeValue.textContent = `${Math.round(state.audioSettings.volume * 100)}%`;
+  els.bellEnabled.checked = state.audioSettings.bell;
+  els.detailsEnabled.checked = state.audioSettings.details;
+}
+
+function saveAudioSettings() {
+  state.audioSettings = { voice: els.voiceSelect.value, rate: Number(els.voiceRate.value),
+    volume: Number(els.voiceVolume.value) / 100, bell: els.bellEnabled.checked, details: els.detailsEnabled.checked };
+  store.set("audioSettings", state.audioSettings);
+  syncAudioSettings();
 }
 
 function say(text, onEnd) {
-  if (!state.speak || !("speechSynthesis" in window) || !text) { onEnd && onEnd(); return; }
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text.replace(/[«»]/g, ""));
-  u.lang = "ru-RU";
-  if (ruVoice) u.voice = ruVoice;
-  u.rate = 1.05;
-  if (onEnd) u.onend = onEnd;
-  speechSynthesis.speak(u);
+  return audio.play(text, { onEnd: onEnd || (() => {}) });
 }
 
 function setSpeak(on) {
@@ -122,7 +158,7 @@ function setSpeak(on) {
   store.set("speak", on);
   els.speakToggle.setAttribute("aria-pressed", String(on));
   els.speakToggle.title = on ? "Озвучка включена" : "Озвучка выключена";
-  if (!on && "speechSynthesis" in window) speechSynthesis.cancel();
+  if (!on) audio.stop();
 }
 
 /* ---------------------------------------------------------------- микрофон */
@@ -148,7 +184,7 @@ function hint(text) { els.hint.textContent = text || ""; }
 
 function startListening() {
   if (state.listening) return;
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  audio.stop();
   if (SR) return startBrowserRecognition();
   if (state.status && state.status.stt_server) return startRecording();
   hint("Голосовой ввод работает в Chrome, Edge и Safari. Можно писать текстом.");
@@ -292,6 +328,14 @@ function agendaItem(it, flash) {
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = it.has_time ? it.due_at.slice(11, 16) : "день";
+  if (it.has_time && it.end_at) {
+    const end = document.createElement("span");
+    end.className = "time-end";
+    end.textContent = "–" + it.end_at.slice(11, 16);
+    if (it.end_at.slice(0, 10) !== it.due_at.slice(0, 10)) end.textContent += " +1";
+    time.appendChild(end);
+  }
+  time.title = it.reminder_text || it.when;
   const title = document.createElement("span");
   title.className = "title";
   title.textContent = it.title;
@@ -315,6 +359,16 @@ function agendaItem(it, flash) {
     catch (err) { showToast(err.message); }
   });
   li.append(check, time, title, del);
+  if (it.notes || it.remind_before_min) {
+    const details = document.createElement("details");
+    details.className = "agenda-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "Подробности";
+    const content = document.createElement("p");
+    content.textContent = [it.notes, it.remind_before_min ? `Напомнить за ${it.remind_before_min} мин.` : "Напомнить в назначенное время."].filter(Boolean).join("\n");
+    details.append(summary, content);
+    li.appendChild(details);
+  }
   return li;
 }
 
@@ -358,16 +412,19 @@ function showToast(text) {
   toastTimer = setTimeout(() => (els.toast.hidden = true), 8000);
 }
 
+let checkingReminders = false;
 async function checkReminders() {
+  if (checkingReminders) return;
+  checkingReminders = true;
   let due;
   try { due = await api("/api/reminders/due?minutes=2"); } catch { return; }
+  finally { checkingReminders = false; }
   for (const it of due) {
     const key = `${it.id}@${it.due_at}`;  // у серии каждое повторение напоминает отдельно
     if (state.notified.has(key)) continue;
     state.notified.add(key);
-    const text = it.type === "meeting" ? `Сейчас встреча: ${it.title}` : `Напоминание: ${it.title}`;
-    showToast(text);
-    say(text);
+    const text = it.reminder_text || `Напоминаю: ${it.when} — ${it.title}.`;
+    audio.play(text, { bell: true, onStart: () => showToast(text) });
   }
   store.set("notified", [...state.notified].slice(-200));
 }
@@ -403,7 +460,32 @@ async function loadStatus() {
 
 els.composer.addEventListener("submit", (e) => { e.preventDefault(); send(els.input.value); });
 els.mic.addEventListener("click", () => (state.listening ? stopListening() : startListening()));
-els.speakToggle.addEventListener("click", () => setSpeak(!state.speak));
+els.speakToggle.addEventListener("click", () => { setSpeak(!state.speak); if (state.speak) audio.unlock(); });
+els.settingsOpen.addEventListener("click", () => { updateVoices(); syncAudioSettings(); els.settings.showModal(); });
+els.settingsClose.addEventListener("click", () => els.settings.close());
+for (const control of [els.voiceSelect, els.voiceRate, els.voiceVolume, els.bellEnabled, els.detailsEnabled]) {
+  control.addEventListener(control.type === "range" ? "input" : "change", saveAudioSettings);
+}
+let previewing = false;
+els.voicePreview.addEventListener("click", async () => {
+  if (previewing) { audio.stop(); return; }
+  previewing = true;
+  els.voicePreview.textContent = "Остановить пример";
+  const previewHint = state.audioSettings.bell ? "Сначала прозвучит колокольчик, затем пример напоминания." : "Сейчас прозвучит пример напоминания.";
+  els.voiceStatus.textContent = previewHint;
+  if (!state.listening) hint("");
+  setSpeak(true);
+  try {
+    await audio.unlock();
+    await audio.play("Напоминаю: сегодня в 13 часов 50 минут у вас встреча с коллегами. Подготовьте вопросы для обсуждения.", { bell: true });
+  } finally {
+    previewing = false;
+    els.voicePreview.textContent = "Прослушать пример";
+    if (els.voiceStatus.textContent === previewHint) els.voiceStatus.textContent = audioHelp;
+  }
+});
+document.addEventListener("pointerdown", () => audio.unlock(), { passive: true });
+document.addEventListener("keydown", () => audio.unlock());
 els.icsCopy.addEventListener("click", copyCalendarLink);
 els.suggestions.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });
 els.planToggle.addEventListener("click", () => { els.agenda.classList.add("open"); els.planToggle.setAttribute("aria-expanded", "true"); });
@@ -413,5 +495,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 setSpeak(state.speak);
+syncAudioSettings();
+updateVoices();
 loadStatus().then(() => { loadAgenda(); checkReminders(); });
 setInterval(checkReminders, 30000);

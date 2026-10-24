@@ -23,6 +23,11 @@ class Draft:
     conflicts_ok: bool = False
     recurrence: Recurrence | None = None   # правило повторения серии
     default_time: time | None = None       # «каждое утро» без точного времени
+    collect_details: bool = False
+    details_done: bool = False
+    lead_done: bool = False
+    notes: str = ""
+    remind_before_min: int = 0
 
 
 @dataclass
@@ -37,10 +42,12 @@ class Pending:
     attempts: int = 0
     day: date | None = None   # scope: о каком повторении спросили
     text: str = ""            # исходная фраза (нужна, чтобы после уточнения выполнить её же)
+    proposed_due: datetime | None = None  # предложенный день переноса сохраняется при уточнении только часов
 
 
 @dataclass
 class Session:
+    collect_details: bool = False
     last_ids: list[int] = field(default_factory=list)
     occ_dates: dict[int, date] = field(default_factory=dict)  # у серий в last_ids — какое повторение было показано
     pending: Pending | None = None

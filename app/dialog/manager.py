@@ -108,9 +108,10 @@ class DialogManager:
 
     # ================================================================ вход
 
-    def handle(self, session_id: str, text: str, user: str | None = None) -> Reply:
+    def handle(self, session_id: str, text: str, user: str | None = None, *, collect_details: bool = False) -> Reply:
         user = user or self.default_user
         s = self.sessions.get(session_id)
+        s.collect_details = collect_details
         now = self.service.now()
         text = (text or "").strip()
         if not text:
@@ -174,7 +175,11 @@ class DialogManager:
             deadline=info.deadline and rule is None,
             duration=info.duration_min,
             recurrence=rule,
+            collect_details=s.collect_details,
         )
+        if info.error:
+            return self._ask(s, info.error, Pending("slot", "create", info.error, slot="datetime", draft=draft),
+                             "datetime")
         return self._proceed(s, user, draft, now)
 
     def _ask(self, s: Session, question: str, pending: Pending, awaiting: str, speech: str | None = None) -> Reply:
@@ -210,11 +215,29 @@ class DialogManager:
                 q = f"Эта дата уже прошла ({ph.day_phrase(d.due.date(), today)}). На какой день поставить?"
                 return self._ask(s, q, Pending("slot", "create", q, slot="date", draft=d), "date")
         conflict_note = ""
+        if d.collect_details and d.type in (ItemType.MEETING, ItemType.REMINDER):
+            if not d.details_done:
+                if d.type == ItemType.MEETING and d.title.lower() == "встреча":
+                    q = "С кем и по какому поводу встреча? Можно также указать место или ссылку."
+                else:
+                    q = f"Что ещё напомнить о записи «{d.title}»? Например, место, участников или что подготовить."
+                q += " Напишите подробности или «пропустить». Чтобы сразу сохранить, скажите «сохранить»."
+                return self._ask(s, q, Pending("enrich", "create", q, slot="details", draft=d), "details")
+            if not d.lead_done:
+                q = ("За сколько времени напомнить? Например, «за 15 минут», «за час» или «в момент начала». "
+                     "Можно ответить «пропустить» — напомню в назначенное время.")
+                return self._ask(s, q, Pending("enrich", "create", q, slot="remind_before", draft=d), "remind_before")
+            if d.remind_before_min and d.due - timedelta(minutes=d.remind_before_min) < now:
+                d.remind_before_min = 0
+                d.lead_done = False
+                q = ("Момент раннего напоминания уже прошёл. За сколько минут напомнить? "
+                     "Выберите меньший интервал или скажите «в момент начала».")
+                return self._ask(s, q, Pending("enrich", "create", q, slot="remind_before", draft=d), "remind_before")
         if d.type == ItemType.MEETING and d.has_time and d.due is not None:
             conflicts = self.service.conflicts(user, d.due, d.duration)
             if conflicts and not d.conflicts_ok:
                 c = conflicts[0]
-                q = (f"В это время уже есть встреча «{c.title}» ({ph.when_phrase(c.due_at, True, today)}). "
+                q = (f"В это время уже есть встреча «{c.title}» ({ph.when_phrase(c.due_at, True, today, c.duration_min)}). "
                      f"Всё равно добавить?")
                 return self._ask(s, q, Pending("confirm", "create", q, draft=d), "confirm")
             if conflicts:
@@ -222,10 +245,13 @@ class DialogManager:
 
         item = self.service.create(user, NewItem(
             type=d.type, title=d.title, due_at=d.due, has_time=d.has_time, duration_min=d.duration,
+            notes=d.notes, remind_before_min=d.remind_before_min,
             recurrence=d.recurrence.to_rrule() if d.recurrence else None))
         s.pending = None
         s.last_ids = [item.id]
-        return Reply(self._created_text(item, d, today) + conflict_note, items=[item], intent="create",
+        extra = f" Напомню за {d.remind_before_min} {ph.plural(d.remind_before_min, ('минуту', 'минуты', 'минут'))}." \
+            if d.remind_before_min else ""
+        return Reply(self._created_text(item, d, today) + extra + conflict_note, items=[item], intent="create",
                      changed=[item.id])
 
     @staticmethod
@@ -239,14 +265,14 @@ class DialogManager:
                 return f"Встреча добавлена: «{item.title}», {sched}. Ближайшая — {first}."
             return f"Добавлена повторяющаяся задача «{item.title}»: {sched}. Ближайший раз — {first}."
         if item.type == ItemType.REMINDER:
-            return f"Хорошо, напомню {ph.when_phrase(item.due_at, True, today)}: «{item.title}»."
+            return f"Хорошо, напомню {ph.when_phrase(item.due_at, True, today, item.duration_min)}: «{item.title}»."
         if item.type == ItemType.MEETING:
             extra = ""
             if item.duration_min and item.duration_min != 60:
                 hours, mins = divmod(item.duration_min, 60)
                 extra = f" (на {hours} ч {mins} мин)" if mins and hours else (
                     f" (на {hours} ч)" if hours else f" (на {mins} мин)")
-            return f"Встреча добавлена: «{item.title}», {ph.when_phrase(item.due_at, True, today)}{extra}."
+            return f"Встреча добавлена: «{item.title}», {ph.when_phrase(item.due_at, True, today, item.duration_min)}{extra}."
         if item.due_at is None:
             return f"Добавлена задача «{item.title}» без срока."
         if d.deadline:
@@ -269,6 +295,8 @@ class DialogManager:
     def _continue_pending(self, s: Session, user: str, text: str, now: datetime) -> Reply | None:
         p = s.pending
         assert p is not None
+        if p.kind == "enrich":
+            return self._continue_enrichment(s, user, p, text, now)
         if _CANCEL.match(text) or (p.kind != "confirm" and _NO.match(text) and len(text.split()) <= 3):
             s.pending = None
             return Reply("Хорошо, отменено.", intent="cancel")
@@ -279,7 +307,38 @@ class DialogManager:
         if p.kind == "scope":
             return self._continue_scope(s, user, p, text, now)
 
+        if p.kind == "confirm":
+            new_command = self._is_new_command(text, now)
+            if new_command is not None and new_command.intent == Intent.CREATE:
+                s.pending = None
+                return None
+
+        if p.kind == "confirm" and p.action == "update" and p.candidates:
+            cmd = p.command
+            assert isinstance(cmd, Command)
+            when = self._move_reply_time(p, text, now)
+            info = parse(when, now)
+            if info.found or info.error:
+                s.pending = None
+                return self._apply(s, user, Intent.UPDATE, p.candidates[0], cmd.model_copy(update={"when": when}),
+                                   text, now, occ_day=p.day)
+            if _YES.match(text):
+                s.pending = None
+                return self._apply(s, user, Intent.UPDATE, p.candidates[0], cmd, p.text, now,
+                                   occ_day=p.day, conflicts_ok=True)
+            if _NO.match(text):
+                q = "Хорошо. На какое время тогда перенести?"
+                return self._ask(s, q, Pending("slot", "update", q, slot="datetime", candidates=p.candidates,
+                                               command=cmd, day=p.day, proposed_due=p.proposed_due), "datetime")
+            if self._is_new_command(text, now, expecting_value=False):
+                s.pending = None
+                return None
+            return Reply(p.question, intent="clarify", awaiting="confirm")
+
         if p.kind == "confirm" and p.draft is not None:
+            info = parse(text, now, "future")
+            if info.found or info.error:
+                return self._fill_time(s, user, p.draft, info, now)
             if _YES.match(text):
                 p.draft.conflicts_ok = True
                 return self._proceed(s, user, p.draft, now)
@@ -287,9 +346,6 @@ class DialogManager:
                 p.draft.has_time = False
                 q = "Хорошо. На какое время тогда поставить?"
                 return self._ask(s, q, Pending("slot", "create", q, slot="time", draft=p.draft), "time")
-            info = parse(text, now, "future")
-            if info.found:
-                return self._fill_time(s, user, p.draft, info, now)
             s.pending = None
             return None
 
@@ -302,12 +358,14 @@ class DialogManager:
                     p.draft.title = clean_title(text, p.draft.type) or text.strip()
                     return self._proceed(s, user, p.draft, now)
                 info = parse(text, now, "future")
-                if info.found:
+                if info.found or info.error:
                     return self._fill_time(s, user, p.draft, info, now)
             elif p.action == "update" and p.candidates:
                 scope = p.command.scope if isinstance(p.command, Command) else None
-                cmd = Command(intent=Intent.UPDATE, when=text, scope=scope)
-                if parse(text, now).found or _SHIFT.search(self._norm(text)):
+                when = self._move_reply_time(p, text, now)
+                cmd = Command(intent=Intent.UPDATE, when=when, scope=scope)
+                info = parse(when, now)
+                if info.found or info.error or _SHIFT.search(self._norm(text)):
                     s.pending = None
                     return self._apply(s, user, Intent.UPDATE, p.candidates[0], cmd, text, now, occ_day=p.day)
             elif p.action == "search" and isinstance(p.command, Command):
@@ -324,7 +382,71 @@ class DialogManager:
         s.pending = None
         return None
 
+    def _continue_enrichment(self, s: Session, user: str, p: Pending, text: str, now: datetime) -> Reply | None:
+        d = p.draft
+        assert d is not None
+        low = text.lower().strip(" .!?,").replace("ё", "е")
+        if low in ("отмена", "отмени", "стоп", "отменить"):
+            s.pending = None
+            return Reply("Хорошо, отменено.", intent="cancel")
+        save = low in ("сохранить", "сохрани", "сохраняй", "без уточнений", "сразу сохранить")
+        skip = save or low in ("пропустить", "пропусти", "нет", "не надо", "не нужно", "дальше",
+                              "без подробностей", "пока не надо")
+        lead_answer = p.slot == "remind_before" and re.match(r"^(?:напомни(?:ть)?(?: мне)?\s+)?за\b", low)
+        if not skip and not lead_answer and self._is_new_command(text, now):
+            s.pending = None
+            return None
+        if save:
+            d.details_done = d.lead_done = True
+        elif p.slot == "details":
+            if low in ("да", "ага", "хорошо"):
+                return Reply(p.question, intent="clarify", awaiting=p.slot)
+            d.notes = "" if skip else text.strip()
+            d.details_done = True
+        else:
+            minutes = 0 if skip or low in ("в момент начала", "в назначенное время", "сразу", "вовремя",
+                                           "в момент", "без опережения") else self._lead_minutes(text)
+            if minutes is None:
+                if self._is_new_command(text, now):
+                    s.pending = None
+                    return None
+                return Reply("Назовите интервал от 0 минут до 7 дней, например «за 15 минут», "
+                             "или ответьте «пропустить».", intent="clarify", awaiting=p.slot)
+            d.remind_before_min = minutes
+            d.lead_done = True
+        return self._proceed(s, user, d, now)
+
+    @classmethod
+    def _lead_minutes(cls, text: str) -> int | None:
+        if re.search(r"-\s*\d", text):
+            return None
+        norm = cls._norm(text)
+        if "минус" in norm:
+            return None
+        if "полчаса" in norm:
+            return 30
+        if "полтора часа" in norm:
+            return 90
+        if re.fullmatch(r"(?:за )?\d+", norm):
+            value = int(norm.split()[-1])
+        else:
+            parts = re.findall(r"(?:(\d+)\s*)?(минут\w*|мин|час\w*|день|дня|дней)\b", norm)
+            if not parts:
+                return None
+            value = sum(int(n or 1) * (60 if unit.startswith("час") else 1440 if unit.startswith("д") else 1)
+                        for n, unit in parts)
+        return value if 0 <= value <= 10080 else None
+
+    @staticmethod
+    def _move_reply_time(p: Pending, text: str, now: datetime) -> str:
+        info = parse(text, now)
+        if p.proposed_due is not None and info.has_time and not info.has_date:
+            return f"{p.proposed_due.date().isoformat()} {text}"
+        return text
+
     def _fill_time(self, s: Session, user: str, d: Draft, info: TimeInfo, now: datetime) -> Reply:
+        if info.error:
+            return self._ask(s, info.error, Pending("slot", "create", info.error, slot="datetime", draft=d), "datetime")
         if info.has_date and info.has_time:
             d.due, d.has_time = info.moment, True
         elif info.has_time and info.moment is not None:
@@ -400,7 +522,10 @@ class DialogManager:
     def _list(self, s: Session, user: str, cmd: Command, now: datetime) -> Reply:
         today = now.date()
         prefer = {"past": "past", "future": "future"}.get(cmd.tense, "nearest")
-        rng = parse(cmd.period or "", now, prefer).query_range()
+        info = parse(cmd.period or "", now, prefer)
+        if info.error:
+            return Reply(info.error, intent="clarify")
+        rng = info.query_range()
         if rng is None:
             if cmd.query:
                 return self._search(s, user, cmd, now)
@@ -461,7 +586,10 @@ class DialogManager:
         today = now.date()
         query = (cmd.query or "").strip()
         prefer = {"past": "past", "future": "future"}.get(cmd.tense, "nearest")
-        rng = parse(cmd.period or "", now, prefer).query_range()
+        info = parse(cmd.period or "", now, prefer)
+        if info.error:
+            return Reply(info.error, intent="clarify")
+        rng = info.query_range()
         if not query:
             if rng is not None:
                 return self._list(s, user, cmd, now)
@@ -628,7 +756,8 @@ class DialogManager:
         return None
 
     def _apply(self, s: Session, user: str, intent: Intent, item_id: int, cmd: Command, text: str,
-               now: datetime, occ_day: date | None = None, ctx_day: date | None = None) -> Reply:
+               now: datetime, occ_day: date | None = None, ctx_day: date | None = None,
+               conflicts_ok: bool = False) -> Reply:
         """Выполнить действие над записью. occ_day — повторение серии, названное в команде;
         ctx_day — повторение, которое было на экране, когда сказали «её»."""
         today = now.date()
@@ -657,7 +786,7 @@ class DialogManager:
                 return self._ask(s, q, pending, "scope")
             if scope == "one":
                 return self._apply_one(s, user, intent, item, cmd, text, now, occ_day or ctx_day
-                                       or self.service.nearest_day(item))
+                                       or self.service.nearest_day(item), conflicts_ok=conflicts_ok)
 
         if intent == Intent.DELETE:
             self.service.delete(user, item_id)
@@ -701,6 +830,10 @@ class DialogManager:
 
         # UPDATE: перенос и/или переименование всей записи (или всей серии)
         s.last_ids = [item.id]
+        info = parse(cmd.when or "", now)
+        if info.error:
+            return self._ask(s, info.error, Pending("slot", "update", info.error, slot="datetime",
+                                                   candidates=[item.id], command=cmd), "datetime")
         new = self._new_time(item, cmd, text, now)
         if cmd.title and new is None:
             renamed = self.service.rename(user, item_id, cmd.title.strip())
@@ -711,7 +844,16 @@ class DialogManager:
             return self._ask(s, q, Pending("slot", "update", q, slot="datetime", candidates=[item.id], command=cmd),
                              "datetime")
         due, has_time = new
-        updated = self.service.reschedule(user, item_id, due, has_time)
+        duration = info.duration_min if info.duration_min is not None else item.duration_min
+        candidate = due
+        if series and due is not None:
+            candidate = self.service.first_occurrence(item.rule.moved_to(due, item.due_at), due, has_time)
+        if not conflicts_ok:
+            question = self._confirm_move(s, user, item, cmd.model_copy(update={"scope": "series"}) if series else cmd,
+                                          text, now, candidate, has_time, duration)
+            if question:
+                return question
+        updated = self.service.reschedule(user, item_id, due, has_time, info.duration_min)
         if cmd.title:
             updated = self.service.rename(user, item_id, cmd.title.strip())
         due = updated.due_at
@@ -720,8 +862,22 @@ class DialogManager:
             return Reply(f"Перенесено: «{updated.title}» — теперь {ph.series_when(updated)}. "
                          f"Ближайший раз — {ph.day_phrase(due.date(), today)}.{note}",
                          items=[updated], intent="update", changed=[item.id])
-        return Reply(f"Перенесено: «{updated.title}» — теперь {ph.when_phrase(due, has_time, today)}.{note}",
+        return Reply(f"Перенесено: «{updated.title}» — теперь {ph.when_phrase(due, has_time, today, updated.duration_min)}.{note}",
                      items=[updated], intent="update", changed=[item.id])
+
+    def _confirm_move(self, s: Session, user: str, item: Item, cmd: Command, text: str, now: datetime,
+                      due: datetime | None, has_time: bool, duration: int | None,
+                      occ_day: date | None = None) -> Reply | None:
+        if item.type != ItemType.MEETING or not has_time or due is None:
+            return None
+        conflicts = self.service.conflicts(user, due, duration, exclude_id=item.id)
+        if not conflicts:
+            return None
+        other = conflicts[0]
+        when = ph.when_phrase(other.due_at, True, now.date(), other.duration_min)
+        q = f"В это время уже есть встреча «{other.title}» ({when}). Всё равно перенести?"
+        return self._ask(s, q, Pending("confirm", "update", q, candidates=[item.id], command=cmd,
+                                       day=occ_day, text=text, proposed_due=due), "confirm")
 
     def _move_note(self, user: str, item: Item, due: datetime | None, has_time: bool, now: datetime,
                    exclude_id: int, check_past: bool = True) -> str:
@@ -735,7 +891,7 @@ class DialogManager:
         return note
 
     def _apply_one(self, s: Session, user: str, intent: Intent, master: Item, cmd: Command, text: str,
-                   now: datetime, day: date | None) -> Reply:
+                   now: datetime, day: date | None, conflicts_ok: bool = False) -> Reply:
         """Перенос или удаление одного повторения серии; остальные не меняются."""
         today = now.date()
         occ = self.service.occurrence_on(master, day) if day else None
@@ -749,6 +905,10 @@ class DialogManager:
             return Reply(f"Удалено одно повторение: «{master.title}» {when_old}. "
                          f"Остальные остаются — {ph.series_when(master)}.", items=[occ], intent="delete",
                          changed=[master.id])
+        info = parse(cmd.when or "", now)
+        if info.error:
+            return self._ask(s, info.error, Pending("slot", "update", info.error, slot="datetime", candidates=[master.id],
+                                                   command=cmd.model_copy(update={"scope": "one"}), day=day), "datetime")
         new = self._new_time(occ, cmd, text, now)
         if new is None and not cmd.title:
             q = f"На когда перенести «{master.title}» ({when_old})?"
@@ -757,13 +917,20 @@ class DialogManager:
                                            command=cmd.model_copy(update={"scope": "one"}), day=day, text=text),
                              "datetime")
         due, has_time = new if new else (occ.due_at, occ.has_time)
-        moved = self.service.detach_occurrence(user, master.id, day, due, has_time, (cmd.title or "").strip() or None)
+        duration = info.duration_min if info.duration_min is not None else occ.duration_min
+        if new is not None and not conflicts_ok:
+            question = self._confirm_move(s, user, master, cmd.model_copy(update={"scope": "one"}), text, now,
+                                          due, has_time, duration, day)
+            if question:
+                return question
+        moved = self.service.detach_occurrence(user, master.id, day, due, has_time, (cmd.title or "").strip() or None,
+                                               info.duration_min)
         s.last_ids = [moved.id]
         note = self._move_note(user, moved, due, has_time, now, exclude_id=moved.id)
         if cmd.title and new is None:
             head = f"Переименовано только {when_old}: «{master.title}» → «{moved.title}»."
         else:
-            head = f"Перенесено только {when_old}: «{moved.title}» — теперь {ph.when_phrase(due, has_time, today)}."
+            head = f"Перенесено только {when_old}: «{moved.title}» — теперь {ph.when_phrase(due, has_time, today, moved.duration_min)}."
         return Reply(f"{head} Остальные повторения без изменений.{note}", items=[moved], intent="update",
                      changed=[master.id, moved.id])
 

@@ -47,6 +47,14 @@ def hm(dt: datetime) -> str:
     return f"{dt.hour}:{dt.minute:02d}"
 
 
+def clock_span(due: datetime, duration_min: int | None = None) -> str:
+    if not duration_min:
+        return hm(due)
+    end = due + timedelta(minutes=duration_min)
+    suffix = " (+1 день)" if end.date() > due.date() else ""
+    return f"{hm(due)}–{hm(end)}{suffix}"
+
+
 def day_phrase(d: date, today: date) -> str:
     """«сегодня», «завтра», «в пятницу, 23 октября», «14 сентября 2025»."""
     delta = (d - today).days
@@ -59,11 +67,29 @@ def day_phrase(d: date, today: date) -> str:
     return base
 
 
-def when_phrase(due: datetime | None, has_time: bool, today: date) -> str:
+def when_phrase(due: datetime | None, has_time: bool, today: date, duration_min: int | None = None) -> str:
     if due is None:
         return "без срока"
     day = day_phrase(due.date(), today)
-    return f"{day} в {hm(due)}" if has_time else day
+    return f"{day} в {clock_span(due, duration_min)}" if has_time else day
+
+
+def reminder_text(item: Item, today: date) -> str:
+    """Полная фраза напоминания: только сохранённые сведения, без выдуманных подробностей."""
+    title = item.title.strip().rstrip(".!?")
+    lower = title[:1].lower() + title[1:]
+    when = when_phrase(item.due_at, item.has_time, today)
+    if item.type == ItemType.MEETING or lower.startswith(("встреча", "созвон", "совещание", "планёрка")):
+        event = lower if lower.startswith(("встреча", "созвон", "совещание", "планёрка")) else f"встреча «{title}»"
+        text = f"Напоминаю: {when} у вас {event}."
+        if item.duration_min and item.end_at:
+            end = when_phrase(item.end_at, True, today) if item.end_at.date() != item.due_at.date() else hm(item.end_at)
+            text += f" Окончание — {end}."
+    else:
+        text = f"Напоминаю: {when} — {title}."
+    if item.notes.strip():
+        text += f" Подробности: {item.notes.strip().rstrip('.!?')}."
+    return text
 
 
 WD_ACC_BARE = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
@@ -102,7 +128,7 @@ def short_when(item: Item, today: date) -> str:
         day = {0: "сегодня", 1: "завтра", -1: "вчера"}[delta]
     else:
         day = f"{d.day} {MONTHS_SHORT[d.month - 1]}" + (f" {d.year}" if d.year != today.year else "")
-    return f"{day}, {hm(item.due_at)}" if item.has_time else day
+    return f"{day}, {clock_span(item.due_at, item.duration_min)}" if item.has_time else day
 
 
 WD_EVERY = ["каждый понедельник", "каждый вторник", "каждую среду", "каждый четверг", "каждую пятницу",
@@ -146,13 +172,14 @@ def series_when(item: Item) -> str:
     """Расписание серии: «каждый понедельник в 10:00»."""
     text = recurrence_text(item.rule, item.due_at)
     if item.has_time and item.due_at:
-        text += f" в {hm(item.due_at)}"
+        text += f" в {clock_span(item.due_at, item.duration_min)}"
     return text
 
 
 def item_line(item: Item, today: date, with_date: bool = True, with_type: bool = True) -> str:
     mark = "✓ " if item.status == ItemStatus.DONE else ""
-    when = short_when(item, today) if with_date else (hm(item.due_at) if item.has_time and item.due_at else "весь день")
+    when = short_when(item, today) if with_date else (clock_span(item.due_at, item.duration_min)
+                                                    if item.has_time and item.due_at else "весь день")
     kind = f" ({type_label(item.type)})" if with_type else ""
     repeat = f", {recurrence_text(item.rule, item.due_at)}" if item.recurrence else ""
     return f"{when} — {mark}{item.title}{kind}{repeat}"

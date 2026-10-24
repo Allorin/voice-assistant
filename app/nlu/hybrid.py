@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from app.nlu.rules import RuleNLU
+from app.nlu.rules import RuleNLU, is_time_correction
 from app.nlu.schema import Command, Intent, NLUContext
 from app.timeparse.repeat import parse_repeat
 from app.timeparse.ru import parse as parse_time
@@ -27,6 +27,8 @@ class HybridNLU:
 
     def parse(self, text: str, ctx: NLUContext) -> Command:
         by_rules = self.rules.parse(text, ctx)
+        if by_rules.intent == Intent.UPDATE and is_time_correction(text):
+            return by_rules  # поправка к последней записи не должна становиться новым созданием
         if self.llm is None:
             return by_rules
         try:
@@ -43,6 +45,11 @@ class HybridNLU:
             by_rules.source = "rules-fallback"
             return by_rules
         if cmd.intent in (Intent.CREATE, Intent.UPDATE) and by_rules.intent == cmd.intent:
+            rules_time = parse_time(by_rules.when or "", ctx.now)
+            if rules_time.duration_min is not None or rules_time.error:
+                cmd.when = by_rules.when  # LLM может сохранить только конечный час интервала
+                if rules_time.range_end and cmd.intent == Intent.CREATE and by_rules.item_type is not None:
+                    cmd.item_type = by_rules.item_type
             # фраза о времени от LLM должна разбираться; иначе берём найденную правилами
             if not cmd.when or not parse_time(cmd.when, ctx.now).found:
                 cmd.when = by_rules.when or cmd.when
@@ -57,4 +64,8 @@ class HybridNLU:
             cmd.scope = cmd.scope or by_rules.scope
         if cmd.intent in (Intent.LIST, Intent.SEARCH) and cmd.period and not parse_time(cmd.period, ctx.now).found:
             cmd.period = by_rules.period
+        if cmd.intent in (Intent.LIST, Intent.SEARCH) and by_rules.intent == cmd.intent:
+            period = parse_time(by_rules.period or "", ctx.now)
+            if period.range_end or period.error:
+                cmd.period = by_rules.period
         return cmd

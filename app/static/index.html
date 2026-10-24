@@ -27,6 +27,10 @@
           </div>
         </div>
         <div class="head-actions">
+          <button class="icon-btn" id="settingsOpen" type="button" aria-haspopup="dialog" title="Настройки озвучки и напоминаний">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+            <span class="sr-only">Настройки озвучки</span>
+          </button>
           <button class="icon-btn" id="speakToggle" type="button" aria-pressed="true" title="Озвучивать ответы">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path class="wave" d="M16 8.5a4.5 4.5 0 0 1 0 7M18.5 6a8 8 0 0 1 0 12"/></svg>
             <span class="sr-only">Озвучивать ответы</span>
@@ -78,7 +82,29 @@
       </footer>
     </aside>
   </div>
+  <dialog class="settings" id="voiceSettings" aria-labelledby="settingsTitle">
+    <div class="settings-head">
+      <h2 id="settingsTitle">Озвучка и напоминания</h2>
+      <button class="icon-btn" id="settingsClose" type="button" aria-label="Закрыть настройки">✕</button>
+    </div>
+    <label class="setting-field" for="voiceSelect">Голос
+      <select id="voiceSelect"><option value="">Автоматически · русский голос</option></select>
+    </label>
+    <label class="setting-field" for="voiceRate"><span>Скорость <output id="rateValue" for="voiceRate">1,05×</output></span>
+      <input id="voiceRate" type="range" min="0.7" max="1.4" step="0.05" value="1.05">
+    </label>
+    <label class="setting-field" for="voiceVolume"><span>Громкость <output id="volumeValue" for="voiceVolume">100%</output></span>
+      <input id="voiceVolume" type="range" min="0" max="100" step="5" value="100">
+    </label>
+    <p class="setting-help">Громкость звука также зависит от настроек браузера и Windows.</p>
+    <label class="setting-check"><input id="bellEnabled" type="checkbox" checked>Колокольчик перед напоминанием</label>
+    <label class="setting-check"><input id="detailsEnabled" type="checkbox" checked>Уточнять подробности при создании</label>
+    <p class="setting-help">Ассистент предложит добавить подробности и выбрать, за сколько напомнить. Можно ответить «пропустить» или «сохранить».</p>
+    <button class="preview-btn" id="voicePreview" type="button">Прослушать пример</button>
+    <p class="setting-help" id="voiceStatus" role="status">Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.</p>
+  </dialog>
   <div class="toast" id="toast" role="alert" hidden></div>
+  <script src="/static/audio.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

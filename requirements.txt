@@ -7,5 +7,6 @@ tzdata>=2024.1
 pymorphy3>=2.0
 rapidfuzz>=3.6
 openai>=1.40
+gigachat>=0.2.3,<0.3
 python-dotenv>=1.0
 python-multipart>=0.0.9

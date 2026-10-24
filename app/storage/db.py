@@ -21,6 +21,8 @@ class ItemRow(Base):
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     type: Mapped[str] = mapped_column(String(16), index=True)
     title: Mapped[str] = mapped_column(String(500))
+    notes: Mapped[str] = mapped_column(Text, default="")
+    remind_before_min: Mapped[int] = mapped_column(Integer, default=0)
     due_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
     has_time: Mapped[bool] = mapped_column(Boolean, default=False)
     duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -37,6 +39,8 @@ class ItemRow(Base):
 
 # Колонки, добавленные после первой версии: для уже существующей базы досоздаются при старте
 _ADDED_COLUMNS = {
+    "notes": "TEXT DEFAULT ''",
+    "remind_before_min": "INTEGER DEFAULT 0",
     "recurrence": "VARCHAR(200)",
     "done_dates": "TEXT DEFAULT ''",
     "skipped_dates": "TEXT DEFAULT ''",

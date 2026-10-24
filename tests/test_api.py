@@ -16,7 +16,8 @@ def test_chat_and_items_api():
     r = c.post("/api/chat", json={"text": "Добавь встречу с командой завтра в 15:00", "session_id": "a"})
     assert r.status_code == 200
     data = r.json()
-    assert data["intent"] == "create" and data["items"][0]["when"] == "завтра в 15:00"
+    assert data["intent"] == "create" and data["items"][0]["when"] == "завтра в 15:00–16:00"
+    assert data["items"][0]["end_at"] == "2026-10-21T16:00:00"
     item_id = data["items"][0]["id"]
 
     upcoming = c.get("/api/items/upcoming").json()

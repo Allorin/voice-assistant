@@ -35,6 +35,8 @@ class Item(BaseModel):
     user_id: str
     type: ItemType
     title: str
+    notes: str = ""                    # подробности для карточки и голосового напоминания
+    remind_before_min: int = Field(default=0, ge=0, le=10080)
     due_at: datetime | None = None      # срок задачи / начало встречи / момент напоминания; у серии — первое повторение
     has_time: bool = False              # False — указан только день
     duration_min: int | None = None     # длительность встречи (для поиска конфликтов)
@@ -59,6 +61,10 @@ class Item(BaseModel):
     def rule(self) -> Recurrence | None:
         return Recurrence.parse(self.recurrence)
 
+    @property
+    def remind_at(self) -> datetime | None:
+        return self.due_at - timedelta(minutes=self.remind_before_min) if self.due_at and self.has_time else None
+
     def occurrence_at(self, moment: datetime) -> Item:
         """Одно повторение серии со своим статусом выполнения."""
         done = moment.date() in self.done_dates
@@ -71,6 +77,8 @@ class Item(BaseModel):
 class NewItem(BaseModel):
     type: ItemType
     title: str
+    notes: str = Field(default="", max_length=1000)
+    remind_before_min: int = Field(default=0, ge=0, le=10080)
     due_at: datetime | None = None
     has_time: bool = False
     duration_min: int | None = None

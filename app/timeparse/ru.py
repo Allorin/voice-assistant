@@ -145,6 +145,8 @@ class TimeInfo:
     period: tuple[datetime, datetime] | None = None  # период [start, end) — «на этой неделе»
     deadline: bool = False                   # «до пятницы», «до конца недели»
     duration_min: int | None = None          # «на 2 часа»
+    range_end: datetime | None = None        # явный интервал «с 13:40 до 13:50»
+    error: str | None = None                 # не сохранять некорректный интервал
     tod: str | None = None                   # время суток словами («утром») — для запросов это часть дня
     tokens: list[Tok] = field(default_factory=list)
     consumed: set[int] = field(default_factory=set)
@@ -159,6 +161,10 @@ class TimeInfo:
 
     def query_range(self) -> tuple[datetime, datetime] | None:
         """Диапазон для запросов «что у меня ...»."""
+        if self.error:
+            return None
+        if self.range_end is not None and self.moment is not None:
+            return self.moment, self.range_end
         if self.period is not None:
             return self.period
         if self.moment is None:
@@ -226,6 +232,8 @@ class _Parts:
     week_anchor: date | None = None
     deadline: bool = False
     duration_min: int | None = None
+    clock_range: bool = False
+    error: str | None = None
 
 
 def _unit_delta(unit: str, n: float) -> tuple[timedelta, int, bool]:
@@ -298,6 +306,13 @@ class _Parser:
     def rules(self) -> list[tuple[re.Pattern, Callable[[re.Match], bool | None]]]:
         R = lambda s: re.compile(s)  # noqa: E731
         return [
+            # Интервал целиком съедается раньше отдельных часов: конец не должен затирать начало.
+            (R(_B + r"(?:с|со|от)\s(?P<h>\d{1,2})(?:[:.](?P<mi>\d{2}))?"
+               r"(?:\s(?P<mer>утра|дня|вечера|ночи))?\s(?:до|по|[-–—])\s"
+               r"(?P<end_h>\d{1,2})(?:[:.](?P<end_mi>\d{2}))?"
+               r"(?:\s(?P<end_mer>утра|дня|вечера|ночи))?" + _E), self._clock_range),
+            (R(_B + r"(?P<h>\d{1,2})[:.](?P<mi>\d{2})\s?[-–—]\s?"
+               r"(?P<end_h>\d{1,2})[:.](?P<end_mi>\d{2})" + _E), self._clock_range),
             (R(_B + r"через\s(?:(?P<n>\d+(?:\.5)?)\s)?" + _UNIT + _E), self._offset),
             (R(_B + r"(?:(?P<n>\d+(?:\.5)?)\s)?" + _UNIT + r"\sназад" + _E), self._ago),
             (R(_B + r"(?:в|на|за)\s(?P<dir>ближайш\w*|следующие|последн\w*|прошедш\w*)\s(?:(?P<n>\d+)\s)?"
@@ -350,6 +365,32 @@ class _Parser:
 
     # ---- обработчики
 
+    def _clock_range(self, m: re.Match):
+        h, end_h = int(m.group("h")), int(m.group("end_h"))
+        mi, end_mi = int(m.group("mi") or 0), int(m.group("end_mi") or 0)
+        if h > 23 or end_h > 23 or mi > 59 or end_mi > 59:
+            self.p.error = "В интервале указано некорректное время. Назовите начало и конец, например: с 13:40 до 13:50."
+            return
+        exact = m.group("mi") is not None or m.group("end_mi") is not None or h > 12 or end_h > 12
+
+        def hour(value: int, mer: str | None):
+            if mer in ("дня", "вечера") and value < 12:
+                return value + 12
+            if mer in ("утра", "ночи") and value == 12:
+                return 0
+            return value + 12 if not mer and not exact and 1 <= value <= 7 else value
+
+        mer, end_mer = m.groupdict().get("mer"), m.groupdict().get("end_mer")
+        start = hour(h, mer or (end_mer if end_mer == "утра" else None)) * 60 + mi
+        end = hour(end_h, end_mer) * 60 + end_mi
+        if end < start and start >= 18 * 60 and end <= 12 * 60:
+            end += 24 * 60  # ночная встреча, например 23:30–00:30
+        if end <= start:
+            self.p.error = "Конец интервала должен быть позже начала. Уточните время, например: с 13:40 до 13:50."
+            return
+        self.p.hm, self.p.meridiem = divmod(start, 60), "exact"
+        self.p.duration_min, self.p.clock_range = end - start, True
+
     def _offset(self, m: re.Match):
         n = float(m.group("n") or 1)
         delta, months, has_time = _unit_delta(m.group("unit"), n)
@@ -392,7 +433,8 @@ class _Parser:
 
     def _duration(self, m: re.Match):
         n = float(m.group("n"))
-        self.p.duration_min = round(n * 60) if m.group("unit").startswith("час") else round(n)
+        if not self.p.clock_range:
+            self.p.duration_min = round(n * 60) if m.group("unit").startswith("час") else round(n)
 
     def _set_day(self, d: date, pre: str | None):
         self.p.day = d
@@ -553,7 +595,7 @@ class _Parser:
     def _resolve(self) -> TimeInfo:
         p = self.p
         info = TimeInfo(tokens=self.toks, consumed=set(self.t.consumed), deadline=p.deadline,
-                        duration_min=p.duration_min, tod=p.tod if p.hm is None else None)
+                        duration_min=p.duration_min, tod=p.tod if p.hm is None else None, error=p.error)
         if p.weekday is not None and p.day is None:  # «в среду 11 ноября» — решает явная дата
             p.day = self._resolve_weekday(*p.weekday)
             if p.week_anchor is not None:
@@ -597,7 +639,11 @@ class _Parser:
 
 def parse(text: str, now: datetime, prefer: Prefer = "future") -> TimeInfo:
     """Разобрать фразу. prefer: future — для создания, past — «когда была», nearest — для запросов."""
-    return _Parser(text, now, prefer).run()
+    parser = _Parser(text, now, prefer)
+    info = parser.run()
+    if parser.p.clock_range and info.moment is not None and info.duration_min:
+        info.range_end = info.moment + timedelta(minutes=info.duration_min)
+    return info
 
 
 def creation_moment(info: TimeInfo, now: datetime) -> tuple[datetime | None, bool]:

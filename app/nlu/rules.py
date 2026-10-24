@@ -17,6 +17,13 @@ def _rx(pattern: str) -> re.Pattern:
     return re.compile(pattern, re.IGNORECASE)
 
 
+_CORRECTION = _rx(r"^(?:нет[\s,]+(?:неправильно|не\s+так)|неправильно|не\s+так|точнее|я\s+имел[а]?\s+в\s*виду)[\s,:—-]*")
+
+
+def is_time_correction(text: str) -> bool:
+    return bool(_CORRECTION.match(text.strip()))
+
+
 _LEAD = r"^(?:(?:а|и|ну|так|слушай|пожалуйста|окей|ок|эй|ассистент)[\s,]+)*"
 
 _CANCEL = _rx(r"^(?:отмена|отмени(?:ть)?|стоп|хватит|не\s+надо|не\s+нужно|забудь|неважно|ничего)[\s.!]*$")
@@ -96,6 +103,7 @@ _RENAME = _rx(r"\b(?:переименуй|назови|измени\s+назва
 
 # Фразы-обёртки, которые не являются содержанием задачи
 _TITLE_PREFIXES = [
+    _rx(r"^(?:то\s+есть|значит)(?:[\s,:]+|$)"),
     # (?:[\s,:]+|$) — слово снимается и тогда, когда после него ничего нет: «Напомни» само по себе — не текст задачи
     _rx(r"^(?:(?:а|и|ну|так|слушай|пожалуйста|окей|ок|эй|ассистент|можешь|можно|давай|плиз)(?:[\s,]+|$))"),
     _rx(r"^(?:напомни\w*|напоминай\w*|поставь|поставить|добавь|добавить|создай|создать|запиши|записать|запланируй"
@@ -244,6 +252,13 @@ class RuleNLU:
         if not low:
             return Command(intent=Intent.UNKNOWN)
 
+        correction = _CORRECTION.match(text)
+        if correction:
+            rest = text[correction.end():]
+            info = parse(rest, ctx.now)
+            if (info.found or info.error) and not (_CREATE_START.match(rest) or _REMIND_START.match(rest)):
+                return Command(intent=Intent.UPDATE, target_last=True, when=info.phrase)
+
         if _CANCEL.match(low):
             return Command(intent=Intent.CANCEL)
         short = len(low.split()) <= 5
@@ -298,6 +313,8 @@ class RuleNLU:
         rep = parse_repeat(text)  # «каждый понедельник» вырезается до разбора даты
         info = parse(rep.rest, ctx.now, "future")
         item_type = _detect_create_type(text, low)
+        if item_type == ItemType.REMINDER and info.range_end and _MEETING_HEAD.search(low):
+            item_type = ItemType.MEETING  # явно заданная встреча занимает весь названный интервал
         title = clean_title(info.remaining_text(), item_type)
         return Command(intent=Intent.CREATE, item_type=item_type, title=title or None,
                        when=info.phrase or None, repeat=rep.phrase or None)

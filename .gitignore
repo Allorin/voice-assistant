@@ -4,8 +4,10 @@ __pycache__/
 .venv/
 venv/
 .env
+.certs/
 data/*.db
 data/*.db-journal
+data/backups/
 .DS_Store
 .idea/
 .vscode/

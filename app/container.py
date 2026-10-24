@@ -9,6 +9,7 @@ from app.clock import Clock
 from app.config import Settings
 from app.dialog.manager import DialogManager
 from app.dialog.session import SessionStore
+from app.nlu.factory import create_llm
 from app.nlu.hybrid import HybridNLU
 from app.nlu.rules import RuleNLU
 from app.search.engine import SearchEngine
@@ -47,11 +48,7 @@ def build(settings: Settings, clock: Clock | None = None) -> Container:
                                             settings.embeddings_model)
     service = ItemService(repo, SearchEngine(embedder), clock)
 
-    llm = None
-    if settings.llm_enabled:
-        from app.nlu.llm import LLMNLU
-
-        llm = LLMNLU(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout)
+    llm = create_llm(settings)
     nlu = HybridNLU(RuleNLU(), llm)
 
     stt = SpeechToText(settings.stt_base_url, settings.stt_api_key, settings.stt_model) \

@@ -32,7 +32,11 @@ async def lifespan(_: FastAPI):
     url = os.getenv("OPEN_BROWSER_URL")
     if url:  # start.bat: открыть страницу, только когда сервер точно поднялся
         threading.Timer(1.0, webbrowser.open, args=[url]).start()
-    yield
+    try:
+        yield
+    finally:
+        if container.nlu.llm is not None:
+            container.nlu.llm.close()
 
 
 app = FastAPI(title="Голосовой ежедневник", lifespan=lifespan)
@@ -52,7 +56,12 @@ class ItemOut(BaseModel):
     type: str
     type_label: str
     title: str
+    notes: str = ""
+    remind_before_min: int = 0
+    remind_at: datetime | None = None
+    reminder_text: str = ""
     due_at: datetime | None
+    end_at: datetime | None = None
     has_time: bool
     when: str
     status: str
@@ -67,10 +76,13 @@ def item_out(item: Item) -> ItemOut:
     today = c().service.now().date()
     series = bool(item.recurrence)
     when = ph.series_when(item) if series and not item.occurrence else \
-        ph.when_phrase(item.due_at, item.has_time, today)
+        ph.when_phrase(item.due_at, item.has_time, today, item.duration_min)
     return ItemOut(
         id=item.id, type=item.type.value, type_label=ph.type_label(item.type), title=item.title,
+        notes=item.notes, remind_before_min=item.remind_before_min, remind_at=item.remind_at,
+        reminder_text=ph.reminder_text(item, today),
         due_at=item.due_at, has_time=item.has_time, when=when, status=item.status.value,
+        end_at=item.end_at if item.duration_min else None,
         duration_min=item.duration_min, recurrence=item.recurrence,
         recurrence_text=ph.recurrence_text(item.rule, item.due_at) if series else None,
         occurrence=item.occurrence, series_id=item.series_id,
@@ -80,6 +92,7 @@ def item_out(item: Item) -> ItemOut:
 class ChatIn(BaseModel):
     text: str = Field(max_length=1000)
     session_id: str = Field(default="default", max_length=100)
+    collect_details: bool = False
 
 
 class ChatOut(BaseModel):
@@ -94,7 +107,7 @@ class ChatOut(BaseModel):
 
 @app.post("/api/chat", response_model=ChatOut)
 def chat(body: ChatIn, x_user_id: str | None = Header(default=None)):
-    r = c().dialog.handle(body.session_id, body.text, _user(x_user_id))
+    r = c().dialog.handle(body.session_id, body.text, _user(x_user_id), collect_details=body.collect_details)
     return ChatOut(reply=r.text, speech=r.speech or r.text, intent=r.intent, awaiting=r.awaiting, nlu=r.nlu,
                    items=[item_out(i) for i in r.items[:30]], changed=r.changed)
 
@@ -154,7 +167,7 @@ def due_reminders(minutes: int = 5, x_user_id: str | None = Header(default=None)
     """Что наступило за последние N минут — страница показывает и озвучивает это как напоминание."""
     now = c().service.now()
     since = now - timedelta(minutes=max(1, min(minutes, 60)))
-    return [item_out(i) for i in c().service.due_reminders(_user(x_user_id), since, now + timedelta(minutes=1))]
+    return [item_out(i) for i in c().service.due_reminders(_user(x_user_id), since, now + timedelta(seconds=1))]
 
 
 def _calendar(user: str, download: bool) -> Response:
@@ -197,7 +210,7 @@ def status():
     s = c().settings
     return {
         "nlu": c().nlu.mode,
-        "llm_model": s.llm_model if s.llm_enabled else None,
+        "llm_model": s.active_llm_model,
         "stt_server": s.stt_enabled,
         "semantic_embeddings": s.embeddings_enabled,
         "now": c().service.now().isoformat(),

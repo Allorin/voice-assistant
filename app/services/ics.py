@@ -92,11 +92,14 @@ def build_calendar(items: Iterable[Item], tz_name: str, tz: tzinfo, now: datetim
                     lines.append(f"EXDATE{tzid}:{_dt(datetime.combine(day, it.due_at.time()))}")
                 else:
                     lines.append(f"EXDATE;VALUE=DATE:{_d(day)}")
+        description = _KIND[it.type] + (' (выполнено)' if done else '')
+        if it.notes:
+            description += "\n" + it.notes
         lines += [f"SUMMARY:{_escape(summary)}", f"CATEGORIES:{_KIND[it.type]}",
-                  f"DESCRIPTION:{_escape(_KIND[it.type] + (' (выполнено)' if done else ''))}",
+                  f"DESCRIPTION:{_escape(description)}",
                   "TRANSP:OPAQUE" if it.type == ItemType.MEETING else "TRANSP:TRANSPARENT"]
         if it.has_time and not done and it.type in (ItemType.REMINDER, ItemType.MEETING):
-            trigger = "-PT10M" if it.type == ItemType.MEETING else "PT0M"
+            trigger = f"-PT{it.remind_before_min}M" if it.remind_before_min else "PT0M"
             lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_escape(it.title)}",
                       f"TRIGGER:{trigger}", "END:VALARM"]
         lines.append("END:VEVENT")

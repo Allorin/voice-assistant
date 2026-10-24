@@ -175,8 +175,11 @@ class ItemService:
         return self._in_range(user, start, start + timedelta(days=days), None, None)
 
     def due_reminders(self, user: str, since: datetime, until: datetime) -> list[Item]:
-        items = self._in_range(user, since, until, [ItemType.REMINDER, ItemType.MEETING], [ItemStatus.OPEN])
-        return [it for it in items if it.has_time]
+        types = [ItemType.REMINDER, ItemType.MEETING]
+        lead = max((it.remind_before_min for it in self.repo.list_all(user) if it.type in types), default=0)
+        items = self._in_range(user, since, until + timedelta(minutes=lead), types, [ItemStatus.OPEN])
+        return sorted((it for it in items if it.remind_at and since <= it.remind_at < until),
+                      key=lambda it: (it.remind_at, it.id))
 
     def search(self, user: str, query: str, item_type: ItemType | None = None,
                period: tuple[datetime, datetime] | None = None, tense: str = "any",
@@ -218,7 +221,10 @@ class ItemService:
     def conflicts(self, user: str, start: datetime, duration_min: int | None,
                   exclude_id: int | None = None) -> list[Item]:
         end = start + timedelta(minutes=duration_min or DEFAULT_MEETING_MINUTES)
-        candidates = self._in_range(user, start - timedelta(hours=12), end, [ItemType.MEETING], [ItemStatus.OPEN])
+        longest = max((it.duration_min or DEFAULT_MEETING_MINUTES for it in self.repo.list_all(user)
+                       if it.type == ItemType.MEETING), default=DEFAULT_MEETING_MINUTES)
+        candidates = self._in_range(user, start - timedelta(minutes=longest), end,
+                                    [ItemType.MEETING], [ItemStatus.OPEN])
         return [c for c in candidates
                 if c.id != exclude_id and c.has_time and c.due_at < end and c.end_at and c.end_at > start]
 
@@ -229,18 +235,20 @@ class ItemService:
             data = data.model_copy(update={"duration_min": DEFAULT_MEETING_MINUTES})
         return self.repo.add(user, data, self.now())
 
-    def reschedule(self, user: str, item_id: int, due_at: datetime | None, has_time: bool) -> Item | None:
+    def reschedule(self, user: str, item_id: int, due_at: datetime | None, has_time: bool,
+                   duration_min: int | None = None) -> Item | None:
         item = self.repo.get(user, item_id)
         if item is None:
             return None
         rule = item.rule
+        duration = {"duration_min": duration_min} if duration_min is not None else {}
         if rule is not None and due_at is not None:
             # серия: «перенеси планёрку на среду в 11» меняет день недели и время всех будущих повторений
             new_rule = rule.moved_to(due_at, item.due_at)
             first = self.first_occurrence(new_rule, due_at, has_time)
             return self.repo.update(user, item_id, self.now(), due_at=first, has_time=has_time,
-                                    recurrence=new_rule.to_rrule())
-        return self.repo.update(user, item_id, self.now(), due_at=due_at, has_time=has_time)
+                                    recurrence=new_rule.to_rrule(), **duration)
+        return self.repo.update(user, item_id, self.now(), due_at=due_at, has_time=has_time, **duration)
 
     def rename(self, user: str, item_id: int, title: str) -> Item | None:
         return self.repo.update(user, item_id, self.now(), title=title)
@@ -298,7 +306,7 @@ class ItemService:
         return occ
 
     def detach_occurrence(self, user: str, item_id: int, day: date, due_at: datetime, has_time: bool,
-                          title: str | None = None) -> Item | None:
+                          title: str | None = None, duration_min: int | None = None) -> Item | None:
         """Перенести (или переименовать) одно повторение: дата исключается из серии,
         а вместо неё создаётся отдельная запись, связанная с серией."""
         master = self.repo.get(user, item_id)
@@ -308,7 +316,9 @@ class ItemService:
         status = ItemStatus.DONE if day in master.done_dates else ItemStatus.OPEN
         return self.repo.add(user, NewItem(
             type=master.type, title=title or master.title, due_at=due_at, has_time=has_time,
-            duration_min=master.duration_min, status=status, series_id=master.id, original_date=day,
+            notes=master.notes, remind_before_min=master.remind_before_min,
+            duration_min=duration_min if duration_min is not None else master.duration_min,
+            status=status, series_id=master.id, original_date=day,
         ), self.now())
 
     def delete(self, user: str, item_id: int) -> bool:

@@ -1,7 +1,7 @@
 """Оценка качества понимания запросов на наборе eval/phrases.jsonl.
 
     python scripts/eval_nlu.py              # правила
-    python scripts/eval_nlu.py --nlu llm    # LLM из .env (LLM_BASE_URL, LLM_MODEL) + страховка правилами
+    python scripts/eval_nlu.py --nlu llm    # LLM из .env (GigaChat или OpenAI-совместимый API) + страховка правилами
 
 «Сейчас» зафиксировано: вторник, 20.10.2026 19:59 — как в тестах.
 """
@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.config import get_settings  # noqa: E402
+from app.nlu.factory import create_llm  # noqa: E402
 from app.nlu.hybrid import HybridNLU  # noqa: E402
 from app.nlu.rules import RuleNLU  # noqa: E402
 from app.nlu.schema import NLUContext  # noqa: E402
@@ -72,16 +73,17 @@ def main() -> None:
     if args.nlu == "llm":
         s = get_settings()
         if not s.llm_enabled:
-            sys.exit("LLM не настроена: заполните LLM_BASE_URL и LLM_MODEL в .env")
-        from app.nlu.llm import LLMNLU
-
-        llm = LLMNLU(s.llm_base_url, s.llm_api_key, s.llm_model, s.llm_timeout)
+            sys.exit("LLM не настроена: заполните GIGACHAT_CREDENTIALS (LLM_PROVIDER=gigachat) "
+                     "или LLM_BASE_URL и LLM_MODEL в .env")
+        llm = create_llm(s)
     nlu = HybridNLU(RuleNLU(), llm)
 
     rows = [json.loads(line) for line in Path(args.file).read_text(encoding="utf-8").splitlines() if line.strip()]
     ok_intent = ok_full = 0
+    llm_answers = 0
     for row in rows:
         cmd = nlu.parse(row["text"], NLUContext(now=NOW))
+        llm_answers += cmd.source == "llm"
         errors = check(cmd, row)
         ok_intent += cmd.intent.value == row["intent"]
         ok_full += not errors
@@ -90,6 +92,8 @@ def main() -> None:
     n = len(rows)
     print(f"\nNLU: {nlu.mode}. Фраз: {n}. Интент верно: {ok_intent}/{n} ({ok_intent / n:.0%}). "
           f"Все поля верно: {ok_full}/{n} ({ok_full / n:.0%}).")
+    if llm is not None:
+        print(f"Ответов LLM: {llm_answers}/{n}; ответов правил вместо LLM: {n - llm_answers}/{n}.")
 
 
 if __name__ == "__main__":

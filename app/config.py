@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, tzinfo
 from functools import lru_cache
 from pathlib import Path
@@ -42,6 +42,16 @@ class Settings:
     embeddings_api_key: str
     embeddings_model: str
 
+    llm_provider: str = "openai"
+    gigachat_credentials: str = field(default="", repr=False)
+    gigachat_scope: str = "GIGACHAT_API_PERS"
+    gigachat_model: str = "GigaChat-2-Max"
+    gigachat_ca_bundle_file: str = ""
+
+    def __post_init__(self):
+        if self.llm_provider not in ("openai", "gigachat"):
+            raise ValueError("LLM_PROVIDER должен быть openai или gigachat")
+
     @property
     def tz(self) -> tzinfo:
         try:
@@ -54,7 +64,15 @@ class Settings:
 
     @property
     def llm_enabled(self) -> bool:
+        if self.llm_provider == "gigachat":
+            return bool(self.gigachat_credentials and self.gigachat_model)
         return bool(self.llm_base_url and self.llm_model)
+
+    @property
+    def active_llm_model(self) -> str | None:
+        if not self.llm_enabled:
+            return None
+        return self.gigachat_model if self.llm_provider == "gigachat" else self.llm_model
 
     @property
     def stt_enabled(self) -> bool:
@@ -83,4 +101,9 @@ def get_settings() -> Settings:
         embeddings_base_url=_env("EMBEDDINGS_BASE_URL"),
         embeddings_api_key=_env("EMBEDDINGS_API_KEY", "none"),
         embeddings_model=_env("EMBEDDINGS_MODEL"),
+        llm_provider=_env("LLM_PROVIDER", "openai").lower(),
+        gigachat_credentials=_env("GIGACHAT_CREDENTIALS"),
+        gigachat_scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+        gigachat_model=_env("GIGACHAT_MODEL", "GigaChat-2-Max"),
+        gigachat_ca_bundle_file=_env("GIGACHAT_CA_BUNDLE_FILE"),
     )
