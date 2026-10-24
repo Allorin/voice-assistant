@@ -27,6 +27,8 @@ class HybridNLU:
 
     def parse(self, text: str, ctx: NLUContext) -> Command:
         by_rules = self.rules.parse(text, ctx)
+        if by_rules.intent == Intent.DELETE:
+            return by_rules  # область удаления и период определяются самой командой, а не догадкой LLM
         if by_rules.intent == Intent.UPDATE and is_time_correction(text):
             return by_rules  # поправка к последней записи не должна становиться новым созданием
         if self.llm is None:
@@ -37,6 +39,9 @@ class HybridNLU:
             log.warning("LLM недоступна, используются правила: %s", exc)
             by_rules.source = "rules-fallback"
             return by_rules
+        if cmd.intent == Intent.DELETE:
+            by_rules.source = "rules-safety"
+            return by_rules  # LLM не должна удалять без команды удаления в исходной реплике
         return self._merge(cmd, by_rules, ctx)
 
     @staticmethod

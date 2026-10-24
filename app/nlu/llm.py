@@ -28,6 +28,7 @@ SYSTEM_PROMPT = """Ты — модуль понимания запросов г�
  "when": "строка или null",
  "repeat": "строка или null",
  "period": "строка или null",
+ "bulk": false,
  "query": "строка или null",
  "occurrence": "строка или null",
  "scope": "one|series|null",
@@ -66,6 +67,9 @@ SYSTEM_PROMPT = """Ты — модуль понимания запросов г�
 - reopen — снять отметку о выполнении («сними галочку», «верни в работу», «я случайно отметил»).
 - update, delete, complete, reopen: если запись не названа («перенеси её», «удали эту», «готово») — target_last=true;
   иначе query — как найти запись («встреча с Марией» → query «Мария», item_type «meeting»).
+- «Удали все планы на сегодня», «удали все встречи на завтра» — delete, bulk=true,
+  period — дословный период, target_last=false. Для всех планов query=null и item_type=null.
+  Никогда не заменяй «все планы» последней обсуждавшейся записью. Отсутствующий период не придумывай.
 - cancel — «отмена», «не надо». help — «что ты умеешь». smalltalk — приветствие или благодарность,
   тогда reply — короткий дружелюбный ответ на русском.
 - unknown — запрос не про задачи, встречи и напоминания."""
@@ -91,6 +95,7 @@ FEW_SHOT: list[tuple[str, dict]] = [
 ]
 
 _DEFAULTS = {"item_type": None, "title": None, "when": None, "repeat": None, "period": None, "query": None,
+             "bulk": False,
              "occurrence": None, "scope": None, "target_last": False, "tense": "any", "ask_when": False,
              "status": None, "reply": None}
 
@@ -123,6 +128,7 @@ def _normalize(data: dict) -> dict:
     if out["scope"] not in ("one", "series"):
         out["scope"] = None
     out["target_last"] = bool(out["target_last"])
+    out["bulk"] = out["bulk"] is True
     out["ask_when"] = bool(out["ask_when"])
     return out
 

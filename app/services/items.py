@@ -207,12 +207,13 @@ class ItemService:
                 items.append(rep)
         return sort_hits(self.search_engine.rank(query, items), now)
 
-    def find_target(self, user: str, query: str, item_type: ItemType | None, done: bool = False) -> list[Hit]:
+    def find_target(self, user: str, query: str, item_type: ItemType | None, done: bool = False,
+                    period: tuple[datetime, datetime] | None = None, strict_type: bool = False) -> list[Hit]:
         """Кандидаты для «перенеси / удали / отметь / сними отметку ...»."""
         flags = {"only_done": True} if done else {"only_open": True}
-        hits = self.search(user, query, item_type, **flags)
-        if not hits and item_type is not None:
-            hits = self.search(user, query, None, **flags)
+        hits = self.search(user, query, item_type, period, **flags)
+        if not hits and item_type is not None and not strict_type:
+            hits = self.search(user, query, None, period, **flags)
         return hits
 
     def last_completed(self, user: str) -> Item | None:
@@ -229,6 +230,9 @@ class ItemService:
                 if c.id != exclude_id and c.has_time and c.due_at < end and c.end_at and c.end_at > start]
 
     # ------------------------------------------------------------ запись
+
+    def delete_confirmed(self, user: str, selection: list[Item]) -> bool:
+        return self.repo.delete_confirmed(user, selection, self.now())
 
     def create(self, user: str, data: NewItem) -> Item:
         if data.type == ItemType.MEETING and data.has_time and not data.duration_min:

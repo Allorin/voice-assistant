@@ -56,9 +56,14 @@ SHIFT_RX = _rx(r"на\s+(?:(?P<n>\d+(?:\.5)?)\s+)?(?P<unit>час\w*|минут\
                r"(?P<dir>позже|раньше|вперед|вперёд|назад)")
 _ON_WORD = re.compile(r"(?<![а-яё])на(?![а-яё])", re.IGNORECASE)
 _QUESTION_HEAD = _rx(r"^(?:какие|какая|какой|что|сколько|покажи\w*|есть\s+ли|список)\b")
-_DELETE = _rx(r"\b(?:удали\w*|удалить|убери|уберите|убрать|сотри|стереть|вычеркни|пропусти\w*|пропустить"
+_DELETE = _rx(r"\b(?:удали(?:те|ть)?\b|удаляй(?:те)?\b|убери\b|уберите\b|убрать\b|сотри\b|стереть\b|вычеркни\b|пропусти(?:те|ть)?\b"
               r"|отмени(?:ть)?\s+(?:мне\s+)?(?:встреч|задач|напомин|созвон|планерк|планёрк|ее|её|его|это|эту|последн"
-              r"|только|ближайш|завтрашн|сегодняшн))")
+              r"|только|ближайш|завтрашн|сегодняшн|все|всё|планы|дела|записи|расписание))")
+_DELETE_ALL = _rx(r"\b(?:удали\w*|удалить|убери|уберите|убрать|сотри|стереть|вычеркни|отмени(?:ть)?)\s+"
+                  r"(?:(?:мне|пожалуйста)\s+)*(?:вс[её]|всех)\b")
+_DELETE_PLURAL = _rx(r"\b(?:удали\w*|удалить|убери|уберите|убрать|сотри|стереть|вычеркни|отмени(?:ть)?)\s+"
+                     r"(?:(?:мне|мои|пожалуйста|все|всё|всех)\s+)*"
+                     r"(?:планы|дела|встречи|встреч|задачи|задач|напоминания|напоминаний|записи|записей|события|расписание)\b")
 # «в пятницу созвона не будет» — удаление, только если названо, чего именно не будет
 _NOT_HAPPEN = _rx(r"\bне\s+будет\b|\bне\s+состоится|\bотменяется\b")
 _COMPLETE = _rx(r"(?:\b(?:отметь|пометь|отмечай|помечай|поставь|сделай)\b.*\b(?:выполн|сделан|готов|заверш)"
@@ -279,10 +284,20 @@ class RuleNLU:
         if _REOPEN.search(low) and not _QUESTION_HEAD.match(low):
             return self._target(text, low, ctx, Intent.REOPEN)
         if _DELETE.search(low):
+            if re.match(_LEAD + r"не\s+(?:удал|убир|убер|сотр|стир|вычерк|отмен)", low):
+                return Command(intent=Intent.CANCEL)
+            if _CREATE_START.match(low):
+                return self._create(text, low, ctx)  # «Добавь задачу удалить все старые файлы»
+            if re.match(_LEAD + r"(?:найди|найти|поищи|поиск|отыщи|разыщи)\b", low):
+                return self._list_or_search(text, low, ctx, Intent.SEARCH)
+            if re.match(_LEAD + r"(?:покажи|показать)\b", low):
+                return self._list_or_search(text, low, ctx, Intent.LIST)
+            if re.match(_LEAD + r"как\b", low):
+                return Command(intent=Intent.HELP)
             return self._target(text, low, ctx, Intent.DELETE)
         if _NOT_HAPPEN.search(low) and not _QUESTION_HEAD.match(low):
             cmd = self._target(text, low, ctx, Intent.DELETE)
-            if not cmd.target_last:
+            if cmd.query or cmd.item_type is not None or _PRONOUN.search(low):
                 return cmd
         if _COMPLETE.search(low) and not _QUESTION_HEAD.match(low):  # «что я уже сделал?» — вопрос
             return self._target(text, low, ctx, Intent.COMPLETE)
@@ -357,8 +372,19 @@ class RuleNLU:
         else:
             cmd.occurrence = info.phrase or None
         query = _ordinal_free(extract_query(info))
+        deletion = _DELETE.search(low) if intent == Intent.DELETE else None
+        if deletion and (_DELETE_PLURAL.match(low, deletion.start()) or (
+                _DELETE_ALL.match(low, deletion.start()) and (info.found or info.error or not query))):
+            cmd.bulk = True
+            cmd.period = info.phrase or None
+            cmd.query = query or None
+            cmd.target_last = False
+            cmd.scope = None
+            cmd.occurrence = None
+            cmd.status = "open" if _STATUS_OPEN.search(low) else "done" if _STATUS_DONE.search(low) else None
+            return cmd
         if cmd.title:
             query = re.sub(r"\b(?:переименуй|назови|название)\b", "", query, flags=re.IGNORECASE).strip()
-        cmd.target_last = bool(_PRONOUN.search(low)) or not query
-        cmd.query = None if cmd.target_last else query
+        cmd.target_last = bool(_PRONOUN.search(low)) or (not query and (intent != Intent.DELETE or not info.found))
+        cmd.query = None if cmd.target_last else (query or None)
         return cmd

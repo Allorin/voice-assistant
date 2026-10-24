@@ -113,8 +113,8 @@ def chat(body: ChatIn, x_user_id: str | None = Header(default=None)):
 
 
 @app.post("/api/session/reset")
-def reset_session(body: ChatIn):
-    c().dialog.sessions.reset(body.session_id)
+def reset_session(body: ChatIn, x_user_id: str | None = Header(default=None)):
+    c().dialog.sessions.reset(body.session_id, _user(x_user_id))
     return {"ok": True}
 
 

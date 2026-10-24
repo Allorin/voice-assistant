@@ -16,7 +16,8 @@ from app.nlu.rules import SHIFT_RX as _SHIFT
 from app.nlu.rules import RuleNLU, clean_title, has_create_trigger
 from app.nlu.schema import Command, Intent, NLUContext
 from app.search.text import lemma
-from app.services.items import ItemService
+from app.search.engine import Hit
+from app.services.items import ItemService, expand_types
 from app.timeparse.repeat import parse_repeat
 from app.timeparse.ru import TimeInfo, creation_moment, parse, tokenize
 
@@ -31,6 +32,8 @@ _SCOPE_SERIES_ANSWER = re.compile(r"\b(?:вс[её]|всю|всех|сери\w*|
 _SCOPE_ONE_ANSWER = re.compile(r"\b(?:только|одн\w*|один|ближайш\w*|эту|это|этот|е[её]|его|перв\w*|разово|раз)\b",
                                re.IGNORECASE)
 _ORDINAL_WORDS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3, "пят": 4}
+_BULK_YES = re.compile(r"^(?:да(?:[,\s]+(?:удали(?:ть)?|удаляй)(?:\s+вс[её])?)?|подтверждаю(?:\s+удаление)?"
+                       r"|удали(?:ть)?|удаляй|yes)[\s.!]*$", re.IGNORECASE)
 
 _QUESTION_FOR = {Intent.UPDATE: "Какую перенести?", Intent.DELETE: "Какую удалить?",
                  Intent.COMPLETE: "Какую отметить выполненной?", Intent.REOPEN: "С какой снять отметку?"}
@@ -110,7 +113,7 @@ class DialogManager:
 
     def handle(self, session_id: str, text: str, user: str | None = None, *, collect_details: bool = False) -> Reply:
         user = user or self.default_user
-        s = self.sessions.get(session_id)
+        s = self.sessions.get(session_id, user)
         s.collect_details = collect_details
         now = self.service.now()
         text = (text or "").strip()
@@ -134,6 +137,8 @@ class DialogManager:
         if cmd.intent == Intent.SEARCH:
             return self._search(s, user, cmd, now)
         if cmd.intent in _ACT_INTENTS:
+            if cmd.intent == Intent.DELETE and cmd.bulk:
+                return self._bulk_delete(s, user, cmd, now)
             return self._act(s, user, cmd, text, now)
         if cmd.intent == Intent.CANCEL:
             had = s.pending is not None
@@ -295,6 +300,8 @@ class DialogManager:
     def _continue_pending(self, s: Session, user: str, text: str, now: datetime) -> Reply | None:
         p = s.pending
         assert p is not None
+        if p.action == "bulk_delete":
+            return self._continue_bulk_delete(s, user, p, text, now)
         if p.kind == "enrich":
             return self._continue_enrichment(s, user, p, text, now)
         if _CANCEL.match(text) or (p.kind != "confirm" and _NO.match(text) and len(text.split()) <= 3):
@@ -645,6 +652,83 @@ class DialogManager:
         self._remember(s, top)
         return Reply("\n".join(lines), speech, items=top, intent="search")
 
+    # ================================================================ массовое удаление
+
+    @staticmethod
+    def _bulk_label(period: tuple[datetime, datetime], now: datetime) -> str:
+        start, end = period
+        last_day = (end - timedelta(microseconds=1)).date()
+        dates = start.strftime("%d.%m.%Y")
+        if last_day != start.date():
+            dates += "–" + last_day.strftime("%d.%m.%Y")
+        if start.time() != time() or end.time() != time():
+            dates = f"{start:%d.%m.%Y %H:%M}–{end:%d.%m.%Y %H:%M}"
+        return f"{ph.period_label(start, end, now.date())} ({dates})"
+
+    def _bulk_items(self, user: str, cmd: Command, period: tuple[datetime, datetime]) -> list[Item]:
+        items = self.service.list_period(user, *period, cmd.item_type)
+        if cmd.status:
+            items = [it for it in items if it.status.value == cmd.status]
+        if cmd.query:
+            matches = {hit.item.id for hit in self.service.search_engine.rank(cmd.query, items)}
+            items = [it for it in items if it.id in matches]
+        return items
+
+    def _bulk_delete(self, s: Session, user: str, cmd: Command, now: datetime,
+                     period: tuple[datetime, datetime] | None = None, note: str = "") -> Reply:
+        if period is None:
+            info = parse(cmd.period or "", now, "nearest")
+            period = info.query_range()
+            if info.error or period is None or (not info.has_date and info.period is None):
+                q = info.error or "За какой период удалить записи? Например, «сегодня», «завтра» или «на этой неделе»."
+                return self._ask(s, q, Pending("slot", "bulk_delete", q, slot="period", command=cmd), "period")
+        if period[1] - period[0] > timedelta(days=366):
+            q = "Выберите период не длиннее года. За какой период удалить записи?"
+            return self._ask(s, q, Pending("slot", "bulk_delete", q, slot="period", command=cmd), "period")
+        items = self._bulk_items(user, cmd, period)
+        label = self._bulk_label(period, now)
+        if not items:
+            s.pending = None
+            return Reply(f"За период «{label}» подходящих записей нет. Ничего не удалено.", intent="delete")
+        lines = [f"{note}Удалить записи за период «{label}»? Найдено: {ph.count_phrase(len(items), cmd.item_type)}."]
+        lines += [f"• {ph.item_line(it, now.date())}" for it in items[:5]]
+        if len(items) > 5:
+            lines.append(f"…и ещё {len(items) - 5}.")
+        if any(it.occurrence for it in items):
+            lines.append("У повторяющихся записей будут удалены только даты в этом периоде.")
+        lines.append("Подтвердите: «да, удалить» или «нет».")
+        q = "\n".join(lines)
+        pending = Pending("confirm", "bulk_delete", q, command=cmd, selection=items, period=period)
+        self._remember(s, items[:5])
+        return self._ask(s, q, pending, "confirm", lines[0] + " Подтвердите: да, удалить, или нет.")
+
+    def _continue_bulk_delete(self, s: Session, user: str, p: Pending, text: str, now: datetime) -> Reply | None:
+        cmd = p.command
+        assert isinstance(cmd, Command)
+        answer = text.strip(" \t\r\n.!?")
+        if _CANCEL.match(text) or _NO.fullmatch(answer):
+            s.pending = None
+            return Reply("Удаление отменено.", intent="cancel")
+        if p.kind == "confirm" and _BULK_YES.fullmatch(answer):
+            assert p.period is not None
+            current = self._bulk_items(user, cmd, p.period)
+            if current != p.selection or not self.service.delete_confirmed(user, p.selection):
+                return self._bulk_delete(s, user, cmd, now, p.period,
+                                         "Список записей изменился. Проверьте его ещё раз. ")
+            s.pending = None
+            s.last_ids = []
+            s.occ_dates = {}
+            return Reply(f"Удалено: {ph.count_phrase(len(p.selection), cmd.item_type)}. "
+                         f"Период: {self._bulk_label(p.period, now)}.", intent="delete",
+                         changed=list(dict.fromkeys(it.id for it in p.selection)))
+        if self._is_new_command(text, now):
+            s.pending = None
+            return None
+        info = parse(text, now, "nearest")
+        if info.found or info.error:
+            return self._bulk_delete(s, user, cmd.model_copy(update={"period": info.phrase}), now)
+        return Reply(p.question, intent="clarify", awaiting="period" if p.kind == "slot" else "confirm")
+
     # ================================================================ изменения
 
     @staticmethod
@@ -677,9 +761,19 @@ class DialogManager:
         today = now.date()
         question = _QUESTION_FOR[cmd.intent]
         day = self._phrase_day(cmd.occurrence, now)
+        constraint = parse(cmd.occurrence or cmd.period or "", now, "nearest")
+        if constraint.error:
+            return Reply(constraint.error, intent="clarify")
+        period = constraint.query_range()
+        if constraint.has_time and constraint.moment and not constraint.range_end and not constraint.period:
+            period = (constraint.moment, constraint.moment + timedelta(minutes=1))
         candidates: list[int] = []
-        if cmd.target_last or not cmd.query:
+        if cmd.target_last or (not cmd.query and period is None):
             ids = s.last_ids
+            allowed = expand_types(cmd.item_type)
+            ids = [item_id for item_id in ids if (item := self.service.get(user, item_id))
+                   and (allowed is None or item.type in allowed)
+                   and self._in_target_period(user, item, period)]
             if cmd.intent == Intent.REOPEN:
                 # «сними отметку» — из обсуждавшихся только отмеченные, иначе последняя отмеченная запись
                 ids = [i for i in ids if (it := self.service.get(user, i)) and self._is_done(it)]
@@ -689,6 +783,9 @@ class DialogManager:
                         return Reply("Нет записей, отмеченных как выполненные.", intent="reopen")
                     return self._apply(s, user, cmd.intent, last.id, cmd, text, now, occ_day=day)
             if not ids:
+                if period is not None:
+                    return Reply("В указанном периоде обсуждавшаяся запись не найдена. Ничего не изменено.",
+                                 intent="clarify")
                 return Reply("Уточните, о какой записи речь — например: «перенеси встречу с Иваном на пятницу».",
                              intent="clarify")
             idx = parse_ordinal(text, len(ids))
@@ -699,15 +796,25 @@ class DialogManager:
                                    ctx_day=s.occ_dates.get(ids[idx]))
             candidates = ids[:5]
         else:
-            hits = self.service.find_target(user, cmd.query, cmd.item_type, done=cmd.intent == Intent.REOPEN)
+            if cmd.query:
+                hits = self.service.find_target(user, cmd.query, cmd.item_type, done=cmd.intent == Intent.REOPEN,
+                                                period=period, strict_type=cmd.intent == Intent.DELETE)
+            else:
+                hits = [Hit(it, 1.0) for it in self.service.list_period(user, *period, cmd.item_type)]
             if cmd.scope == "series":
                 hits = [h for h in hits if h.item.recurrence] or hits
-            if day is not None and hits:
-                # «удали встречу с Иваном в понедельник» — среди похожих берём ту, что в этот день
-                hits = [h for h in hits if self._on_day(user, h.item, day)] or hits
+            hits = [h for h in hits if self._in_target_period(user, h.item, period)]
             if not hits:
+                if day is not None and cmd.query:
+                    nearby = self.service.find_target(user, cmd.query, cmd.item_type, strict_type=True)
+                    series = [h.item for h in nearby if h.item.recurrence]
+                    if len({it.id for it in series}) == 1 and not self._on_day(user, series[0], day):
+                        return Reply(f"{ph.cap(ph.day_phrase(day, today))} повторения «{series[0].title}» нет — "
+                                     f"оно бывает {ph.series_when(series[0])}.", intent=cmd.intent.value)
                 what = "отмеченной записи" if cmd.intent == Intent.REOPEN else "подходящей записи"
-                return Reply(f"Не нашлось {what} по запросу «{query_label(cmd.query)}».", intent=cmd.intent.value)
+                label = f" по запросу «{query_label(cmd.query)}»" if cmd.query else ""
+                bound = f" за период «{self._bulk_label(period, now)}»" if period else ""
+                return Reply(f"Не нашлось {what}{label}{bound}. Ничего не изменено.", intent=cmd.intent.value)
             best = max(h.score for h in hits)
             strong = [h for h in hits if h.score >= 0.85 * best]
             if day is None:
@@ -727,6 +834,15 @@ class DialogManager:
         q = "\n".join(lines)
         pending = Pending("choice", cmd.intent.value, q, candidates=[it.id for it in items], command=cmd, text=text)
         return self._ask(s, q, pending, "choice", f"Подходит несколько записей. {ph.cap(spoken)}. {question}")
+
+    def _in_target_period(self, user: str, item: Item, period: tuple[datetime, datetime] | None) -> bool:
+        if item.user_id != user:
+            return False
+        if period is None:
+            return True
+        if item.recurrence and not item.occurrence:
+            return bool(self.service.occurrences(item, *period))
+        return item.due_at is not None and period[0] <= item.due_at < period[1]
 
     @staticmethod
     def _line(item: Item, today: date) -> str:
@@ -765,6 +881,15 @@ class DialogManager:
         if item is None:
             s.last_ids = [i for i in s.last_ids if i != item_id]
             return Reply("Этой записи уже нет.", intent=intent.value)
+        if intent == Intent.DELETE:
+            info = parse(cmd.occurrence or cmd.period or "", now, "nearest")
+            if info.error:
+                return Reply(info.error, intent="clarify")
+            period = info.query_range()
+            if info.has_time and info.moment and not info.range_end and not info.period:
+                period = (info.moment, info.moment + timedelta(minutes=1))
+            if not self._in_target_period(user, item, period):
+                return Reply("Эта запись не относится к указанному периоду. Ничего не удалено.", intent="delete")
         series = item.rule is not None
         if series and occ_day is not None and self.service.occurrence_on(item, occ_day) is None:
             return Reply(f"{ph.cap(ph.day_phrase(occ_day, today))} повторения «{item.title}» нет — "

@@ -35,7 +35,8 @@ class Command(BaseModel):
     title: str | None = None            # create: содержание; update: новое название
     when: str | None = None             # create/update: фраза о времени
     repeat: str | None = None           # create: фраза о повторении («каждый понедельник»)
-    period: str | None = None           # list/search: фраза периода
+    period: str | None = None           # list/search/bulk delete: фраза периода
+    bulk: bool = False                  # delete: все подходящие записи за период, с подтверждением
     query: str | None = None            # search: что ищем; update/delete/complete/reopen: какую запись
     occurrence: str | None = None       # update/delete/...: какое повторение серии («в понедельник»), фраза
     scope: Literal["one", "series"] | None = None  # только это повторение / вся серия

@@ -6,7 +6,7 @@ import time as _time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
-from app.models import ItemType
+from app.models import Item, ItemType
 from app.recurrence import Recurrence
 
 
@@ -43,6 +43,8 @@ class Pending:
     day: date | None = None   # scope: о каком повторении спросили
     text: str = ""            # исходная фраза (нужна, чтобы после уточнения выполнить её же)
     proposed_due: datetime | None = None  # предложенный день переноса сохраняется при уточнении только часов
+    selection: list[Item] = field(default_factory=list)  # снимок записей, показанных перед массовым удалением
+    period: tuple[datetime, datetime] | None = None
 
 
 @dataclass
@@ -60,19 +62,19 @@ class SessionStore:
 
     def __init__(self, ttl_seconds: int = 3 * 3600):
         self.ttl = ttl_seconds
-        self._data: dict[str, Session] = {}
+        self._data: dict[tuple[str, str], Session] = {}
         self._lock = threading.Lock()
 
-    def get(self, session_id: str) -> Session:
+    def get(self, session_id: str, user_id: str = "demo") -> Session:
         now = _time.monotonic()
         with self._lock:
             expired = [k for k, s in self._data.items() if now - s.touched > self.ttl]
             for k in expired:
                 del self._data[k]
-            session = self._data.setdefault(session_id, Session())
+            session = self._data.setdefault((user_id, session_id), Session())
             session.touched = now
             return session
 
-    def reset(self, session_id: str) -> None:
+    def reset(self, session_id: str, user_id: str = "demo") -> None:
         with self._lock:
-            self._data.pop(session_id, None)
+            self._data.pop((user_id, session_id), None)

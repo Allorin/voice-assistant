@@ -125,6 +125,42 @@ class ItemRepository:
             s.commit()
             return res.rowcount
 
+    def delete_confirmed(self, user_id: str, selection: list[Item], now: datetime) -> bool:
+        """Удалить проверенный снимок одной транзакцией; у серий исключить только выбранные даты.
+
+        Если запись изменилась после показа подтверждения, ничего не удаляется.
+        """
+        if not selection:
+            return True
+        ids = {item.id for item in selection}
+        with self._sf.begin() as s:
+            if s.bind.dialect.name == "sqlite":
+                s.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            stmt = select(ItemRow).where(ItemRow.user_id == user_id, ItemRow.id.in_(ids)).with_for_update()
+            rows = {row.id: row for row in s.scalars(stmt)}
+            skipped: dict[int, set[date]] = {}
+            for expected in selection:
+                if expected.recurrence and not expected.occurrence:
+                    return False
+                row = rows.get(expected.id)
+                if row is None or expected.user_id != user_id:
+                    return False
+                current = _to_item(row)
+                if expected.occurrence:
+                    if current.rule is None or expected.due_at is None:
+                        return False
+                    current = current.occurrence_at(expected.due_at)
+                    skipped.setdefault(row.id, set()).add(expected.due_at.date())
+                if current != expected:
+                    return False
+            for item_id, row in rows.items():
+                if item_id in skipped:
+                    row.skipped_dates = _dump_dates([*_parse_dates(row.skipped_dates), *skipped[item_id]])
+                    row.updated_at = now
+                else:
+                    s.delete(row)
+        return True
+
     def list_between(
         self,
         user_id: str,
