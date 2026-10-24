@@ -1,0 +1,70 @@
+{"text": "Напомни мне завтра в 10 утра позвонить Ивану", "intent": "create", "item_type": "reminder", "title": "Позвонить Ивану", "due": "2026-10-21T10:00"}
+{"text": "В пятницу нужно отправить отчет", "intent": "create", "item_type": "task", "title": "Отправить отчет", "due": "2026-10-23T00:00"}
+{"text": "Поставь задачу купить билеты до конца недели", "intent": "create", "item_type": "task", "title": "Купить билеты", "due": "2026-10-25T00:00"}
+{"text": "Добавь встречу с командой завтра в 15:00", "intent": "create", "item_type": "meeting", "title": "Встреча с командой", "due": "2026-10-21T15:00"}
+{"text": "В четверг в 11 у меня встреча с дизайнером", "intent": "create", "item_type": "meeting", "title": "Встреча с дизайнером", "due": "2026-10-22T11:00"}
+{"text": "Не забыть оплатить интернет послезавтра", "intent": "create", "item_type": "task", "title": "Оплатить интернет", "due": "2026-10-22T00:00"}
+{"text": "Запланируй созвон с партнёрами на понедельник в 12:30", "intent": "create", "item_type": "meeting", "title": "Созвон с партнёрами", "due": "2026-10-26T12:30"}
+{"text": "Напомни через 15 минут проверить почту", "intent": "create", "item_type": "reminder", "title": "Проверить почту", "due": "2026-10-20T20:14"}
+{"text": "Надо на следующей неделе подготовить презентацию для клиента", "intent": "create", "item_type": "task", "title": "Подготовить презентацию для клиента", "due": "2026-10-26T00:00"}
+{"text": "Создай напоминание полить цветы в субботу утром", "intent": "create", "item_type": "reminder", "title": "Полить цветы", "due": "2026-10-24T09:00"}
+{"text": "У нас в среду в 10 планёрка", "intent": "create", "item_type": "meeting", "title": "Планёрка", "due": "2026-10-21T10:00"}
+{"text": "Запиши задачу: согласовать договор с юристом к 5 ноября", "intent": "create", "item_type": "task", "title": "Согласовать договор с юристом", "due": "2026-11-05T00:00"}
+{"text": "Назначь встречу с Ольгой 28 октября в 14:00 на полтора часа", "intent": "create", "item_type": "meeting", "title": "Встреча с Ольгой", "due": "2026-10-28T14:00"}
+{"text": "Мне нужно купить подарок маме до пятницы", "intent": "create", "item_type": "task", "title": "Купить подарок маме", "due": "2026-10-23T00:00"}
+{"text": "Напомни завтра в половине девятого забрать ребёнка", "intent": "create", "item_type": "reminder", "title": "Забрать ребёнка", "due": "2026-10-21T08:30"}
+{"text": "Поставь встречу с Иваном завтра", "intent": "create", "item_type": "meeting", "title": "Встреча с Иваном", "due": "2026-10-21T00:00"}
+{"text": "Что у меня сегодня?", "intent": "list", "period_start": "2026-10-20T00:00"}
+{"text": "Какие планы на сегодня?", "intent": "list", "period_start": "2026-10-20T00:00"}
+{"text": "Покажи мои встречи на сегодня", "intent": "list", "item_type": "meeting", "period_start": "2026-10-20T00:00"}
+{"text": "Есть ли у меня встречи сегодня?", "intent": "list", "item_type": "meeting", "period_start": "2026-10-20T00:00"}
+{"text": "Какие задачи у меня на завтра?", "intent": "list", "item_type": "task", "period_start": "2026-10-21T00:00"}
+{"text": "Что запланировано на эту неделю?", "intent": "list", "period_start": "2026-10-19T00:00"}
+{"text": "Чем я занят в пятницу?", "intent": "list", "period_start": "2026-10-23T00:00"}
+{"text": "Расписание на следующую неделю", "intent": "list", "period_start": "2026-10-26T00:00"}
+{"text": "Что было вчера?", "intent": "list", "period_start": "2026-10-19T00:00"}
+{"text": "Сколько у меня встреч послезавтра?", "intent": "list", "item_type": "meeting", "period_start": "2026-10-22T00:00"}
+{"text": "Какие напоминания на выходные?", "intent": "list", "item_type": "reminder", "period_start": "2026-10-24T00:00"}
+{"text": "Что по планам на завтра", "intent": "list", "period_start": "2026-10-21T00:00"}
+{"text": "Найди задачу про презентацию", "intent": "search", "item_type": "task", "query": "презентация"}
+{"text": "Когда у меня была встреча с Иваном?", "intent": "search", "item_type": "meeting", "query": "иван", "tense": "past"}
+{"text": "Я когда-то ставил задачу по договору, найди ее", "intent": "search", "query": "договор"}
+{"text": "Поищи всё про CRM", "intent": "search", "query": "crm"}
+{"text": "Когда следующий созвон с Альфой?", "intent": "search", "query": "альфа", "tense": "future"}
+{"text": "Была ли у меня встреча с Марией на прошлой неделе?", "intent": "search", "item_type": "meeting", "query": "мария", "tense": "past"}
+{"text": "Где у меня задача про смету?", "intent": "search", "item_type": "task", "query": "смета"}
+{"text": "А перенеси её на завтра", "intent": "update", "target_last": true}
+{"text": "Перенеси встречу с Марией на пятницу в 12", "intent": "update", "query": "мария"}
+{"text": "Сдвинь созвон с Альфой на час позже", "intent": "update", "query": "альфа"}
+{"text": "Удали встречу с дизайнером", "intent": "delete", "query": "дизайнер"}
+{"text": "Отмени встречу с Иваном", "intent": "delete", "query": "иван"}
+{"text": "Отметь задачу купить билеты выполненной", "intent": "complete", "query": "билет"}
+{"text": "Готово", "intent": "complete", "target_last": true}
+{"text": "Я позвонил Ивану, закрой задачу", "intent": "complete", "query": "иван"}
+{"text": "Отмена", "intent": "cancel"}
+{"text": "Что ты умеешь?", "intent": "help"}
+{"text": "Привет!", "intent": "smalltalk"}
+{"text": "Слушай, закинь в список дел помыть машину в воскресенье", "intent": "create", "item_type": "task", "title": "Помыть машину", "due": "2026-10-25T00:00"}
+{"text": "Мне в понедельник к девяти на работу, напомни", "intent": "create", "item_type": "reminder", "title": "На работу", "due": "2026-10-26T09:00"}
+{"text": "Запланируй на завтра обед с Анной в час дня", "intent": "create", "item_type": "meeting", "title": "Обед с Анной", "due": "2026-10-21T13:00"}
+{"text": "Чем занят завтра с утра?", "intent": "list", "period_start": "2026-10-21T05:00"}
+{"text": "Есть что-нибудь на выходных?", "intent": "list", "period_start": "2026-10-24T00:00"}
+{"text": "Когда я последний раз созванивался с Пульсом?", "intent": "search", "query": "пульс", "tense": "past"}
+{"text": "Задача про смету сделана", "intent": "complete", "query": "смета"}
+{"text": "Передвинь её на вечер", "intent": "update", "target_last": true}
+{"text": "Каждый понедельник в 10 у меня планёрка", "intent": "create", "item_type": "meeting", "title": "Планёрка", "repeat": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO"}
+{"text": "Напоминай каждый день в 9 пить воду", "intent": "create", "item_type": "reminder", "title": "Пить воду", "repeat": "FREQ=DAILY;INTERVAL=1"}
+{"text": "По будням в 8:30 зарядка", "intent": "create", "title": "Зарядка", "repeat": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR"}
+{"text": "Поставь задачу оплачивать интернет 15 числа каждого месяца", "intent": "create", "item_type": "task", "title": "Оплачивать интернет", "repeat": "FREQ=MONTHLY;INTERVAL=1;BYMONTHDAY=15"}
+{"text": "По вторникам и четвергам в 19 бассейн", "intent": "create", "title": "Бассейн", "repeat": "FREQ=WEEKLY;INTERVAL=1;BYDAY=TU,TH"}
+{"text": "Каждые две недели по пятницам созвон с Альфой", "intent": "create", "item_type": "meeting", "title": "Созвон с Альфой", "repeat": "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR"}
+{"text": "Сними отметку с задачи про билеты", "intent": "reopen", "query": "билет"}
+{"text": "Я случайно отметил задачу про акт", "intent": "reopen", "query": "акт"}
+{"text": "Верни её в работу", "intent": "reopen", "target_last": true}
+{"text": "Какие задачи не выполнены?", "intent": "list", "item_type": "task", "status": "open"}
+{"text": "Что я уже сделал на этой неделе", "intent": "list", "status": "done", "period_start": "2026-10-19T00:00"}
+{"text": "Перенеси планёрку в понедельник на 12", "intent": "update", "query": "планерка"}
+{"text": "В пятницу созвона с Альфой не будет", "intent": "delete", "query": "альфа"}
+{"text": "Пропусти зарядку в понедельник", "intent": "delete", "query": "зарядка"}
+{"text": "Удали все планёрки", "intent": "delete", "query": "планерка"}
+{"text": "По будням зарядка", "intent": "create", "title": "Зарядка", "repeat": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR"}

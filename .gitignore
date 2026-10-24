@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+data/*.db
+data/*.db-journal
+.DS_Store
+.idea/
+.vscode/
+.ruff_cache/
+push_to_github.bat

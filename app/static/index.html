@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Голосовой ежедневник</title>
+  <link rel="icon" href="/static/icons/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/static/icons/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="/static/icons/favicon-16.png" type="image/png" sizes="16x16">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0e7c66">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app">
+    <main class="chat" aria-label="Диалог с ассистентом">
+      <header class="chat-head">
+        <div class="brand">
+          <img class="avatar" src="/static/icons/avatar.png" width="44" height="44" alt="">
+          <div>
+            <h1>Ежедневник</h1>
+            <p class="status" id="status">Подключение…</p>
+          </div>
+        </div>
+        <div class="head-actions">
+          <button class="icon-btn" id="speakToggle" type="button" aria-pressed="true" title="Озвучивать ответы">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path class="wave" d="M16 8.5a4.5 4.5 0 0 1 0 7M18.5 6a8 8 0 0 1 0 12"/></svg>
+            <span class="sr-only">Озвучивать ответы</span>
+          </button>
+          <button class="icon-btn plan-toggle" id="planToggle" type="button" aria-controls="agenda" aria-expanded="false">
+            План
+          </button>
+        </div>
+      </header>
+
+      <section class="log" id="log" aria-live="polite">
+        <div class="empty" id="empty">
+          <p class="empty-title">Скажите или напишите, что нужно запомнить или найти.</p>
+          <div class="suggestions" id="suggestions">
+            <button type="button">Напомни мне завтра в 10 утра позвонить Ивану</button>
+            <button type="button">В четверг в 11 у меня встреча с дизайнером</button>
+            <button type="button">Что у меня сегодня?</button>
+            <button type="button">Найди задачу про презентацию</button>
+            <button type="button">Когда у меня была встреча с Иваном?</button>
+            <button type="button">Каждый понедельник в 10 у меня планёрка</button>
+          </div>
+        </div>
+      </section>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <label class="sr-only" for="input">Запрос</label>
+        <input id="input" type="text" placeholder="Например: поставь встречу с командой завтра в 15:00" maxlength="1000">
+        <button class="send" type="submit" title="Отправить">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M13 6l6 6-6 6"/></svg>
+          <span class="sr-only">Отправить</span>
+        </button>
+        <button class="mic" id="mic" type="button" aria-pressed="false" title="Говорить">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+          <span class="sr-only" id="micLabel">Говорить</span>
+        </button>
+      </form>
+      <p class="hint" id="hint" role="status"></p>
+    </main>
+
+    <aside class="agenda" id="agenda" aria-label="Ближайшие 7 дней">
+      <header class="agenda-head">
+        <h2>Ближайшие 7 дней</h2>
+        <button class="icon-btn close-plan" id="planClose" type="button">Закрыть</button>
+      </header>
+      <div id="agendaList" class="agenda-list"></div>
+      <footer class="agenda-foot">
+        <a href="/api/calendar.ics" download="planner.ics">Скачать .ics</a>
+        <button type="button" id="icsCopy">Ссылка для подписки</button>
+      </footer>
+    </aside>
+  </div>
+  <div class="toast" id="toast" role="alert" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
