@@ -326,3 +326,8 @@ h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
 /* ---------- код доступа ---------- */
 .access h2 { margin: 0 0 8px; font-size: 19px; }
 .access::backdrop { background: #080e1acc; }
+
+/* ---------- подписка на календарь ---------- */
+.calendar-actions { display: grid; gap: 8px; margin: 4px 0 12px; }
+.calendar-actions a { display: block; text-align: center; text-decoration: none; box-sizing: border-box; }
+#calendarUrl { font-size: 13px; }

@@ -78,7 +78,7 @@
       <div id="agendaList" class="agenda-list"></div>
       <footer class="agenda-foot">
         <a href="/api/calendar.ics" id="icsDownload" download="planner.ics">Скачать .ics</a>
-        <button type="button" id="icsCopy">Ссылка для подписки</button>
+        <button type="button" id="icsCopy">Подключить календарь</button>
       </footer>
     </aside>
   </div>
@@ -111,6 +111,25 @@
     <p class="setting-help">Ассистент предложит добавить подробности и выбрать, за сколько напомнить. Можно ответить «пропустить» или «сохранить».</p>
     <button class="preview-btn" id="voicePreview" type="button">Прослушать пример</button>
     <p class="setting-help" id="voiceStatus" role="status">Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.</p>
+  </dialog>
+  <dialog class="settings" id="calendarDialog" aria-labelledby="calendarTitle">
+    <div class="settings-head">
+      <h2 id="calendarTitle">Подписка на календарь</h2>
+      <button class="icon-btn" id="calendarClose" type="button" aria-label="Закрыть">✕</button>
+    </div>
+    <p class="setting-help">Записи ассистента появятся в вашем календаре и будут обновляться сами. Ссылка личная — не публикуйте её.</p>
+    <label class="setting-field" for="calendarUrl">Ссылка
+      <span class="profile-row">
+        <input id="calendarUrl" type="text" readonly spellcheck="false">
+        <button class="profile-btn" id="calendarCopy" type="button">Скопировать</button>
+      </span>
+    </label>
+    <div class="calendar-actions">
+      <a class="preview-btn" id="calendarGoogle" target="_blank" rel="noopener">Добавить в Google Календарь</a>
+      <a class="profile-btn" id="calendarWebcal">Apple Календарь или Outlook</a>
+    </div>
+    <p class="setting-help" id="calendarHelp">Яндекс Календарь: «Новый календарь» → «Подписаться на календарь» → вставьте ссылку.
+      Google обновляет подписку раз в несколько часов, Яндекс — примерно раз в час.</p>
   </dialog>
   <dialog class="settings access" id="accessDialog" aria-labelledby="accessTitle">
     <form id="accessForm" autocomplete="off">

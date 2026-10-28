@@ -9,6 +9,9 @@ const els = {
   micLabel: $("micLabel"), hint: $("hint"), status: $("status"), speakToggle: $("speakToggle"),
   agenda: $("agenda"), agendaList: $("agendaList"), planToggle: $("planToggle"), planClose: $("planClose"),
   toast: $("toast"), suggestions: $("suggestions"), icsCopy: $("icsCopy"),
+  calendar: $("calendarDialog"), calendarClose: $("calendarClose"), calendarUrl: $("calendarUrl"),
+  calendarCopy: $("calendarCopy"), calendarGoogle: $("calendarGoogle"), calendarWebcal: $("calendarWebcal"),
+  calendarHelp: $("calendarHelp"),
   settings: $("voiceSettings"), settingsOpen: $("settingsOpen"), settingsClose: $("settingsClose"),
   voiceSelect: $("voiceSelect"), voiceRate: $("voiceRate"), voiceVolume: $("voiceVolume"),
   rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
@@ -492,16 +495,32 @@ async function checkReminders() {
 
 /* ---------------------------------------------------------------- календарь */
 
-async function copyCalendarLink() {
+function openCalendarDialog() {
   const path = (state.status && state.status.calendar_path) || "/calendar/demo.ics";
   const url = location.origin + path;
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-  let copied = true;
-  try { await navigator.clipboard.writeText(url); } catch { copied = false; /* нет доступа к буферу — покажем ссылку */ }
-  showToast(local
-    ? `Ссылка: ${url}. Подписка заработает, когда сайт будет доступен из интернета. Пока можно скачать .ics и импортировать.`
-    : `${copied ? "Ссылка скопирована" : `Ссылка: ${url}`}. Google Календарь: «Другие календари» → «+» → «Добавить по URL». `
-      + `Яндекс Календарь: «Новый календарь» → «Подписаться на календарь». Ссылка личная, не публикуйте её.`);
+  els.calendarUrl.value = url;
+  // Google принимает ссылку подписки в параметре cid; Apple и Outlook открывают схему webcal://
+  els.calendarGoogle.href = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(url.replace(/^https?:/, "webcal:"))}`;
+  els.calendarWebcal.href = url.replace(/^https?:/, "webcal:");
+  els.calendarGoogle.hidden = els.calendarWebcal.hidden = local;
+  if (local) {
+    els.calendarHelp.textContent = "Подписка работает, когда сайт открыт из интернета (на стенде). "
+      + "Локально можно скачать .ics и импортировать его в календарь.";
+  }
+  els.calendar.showModal();
+  els.calendarUrl.select();
+}
+
+async function copyCalendarLink() {
+  try {
+    await navigator.clipboard.writeText(els.calendarUrl.value);
+    els.calendarCopy.textContent = "Скопировано";
+  } catch {
+    els.calendarUrl.select();  // нет доступа к буферу — ссылка выделена, её можно скопировать вручную
+    els.calendarCopy.textContent = "Ctrl+C";
+  }
+  setTimeout(() => (els.calendarCopy.textContent = "Скопировать"), 2000);
 }
 
 /* ---------------------------------------------------------------- профили */
@@ -587,7 +606,9 @@ els.voicePreview.addEventListener("click", async () => {
 });
 document.addEventListener("pointerdown", () => audio.unlock(), { passive: true });
 document.addEventListener("keydown", () => audio.unlock());
-els.icsCopy.addEventListener("click", copyCalendarLink);
+els.icsCopy.addEventListener("click", openCalendarDialog);
+els.calendarCopy.addEventListener("click", copyCalendarLink);
+els.calendarClose.addEventListener("click", () => els.calendar.close());
 els.suggestions.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });
 els.planToggle.addEventListener("click", () => { els.agenda.classList.add("open"); els.planToggle.setAttribute("aria-expanded", "true"); });
 els.planClose.addEventListener("click", () => { els.agenda.classList.remove("open"); els.planToggle.setAttribute("aria-expanded", "false"); });
