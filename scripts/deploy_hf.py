@@ -1,4 +1,5 @@
-"""Выкладка прототипа на Hugging Face Spaces (Docker).
+"""Выкладка прототипа на Hugging Face Spaces (Docker). Нужна подписка Hugging Face PRO;
+бесплатный стенд разворачивается на Render по render.yaml (см. README).
 
 Запуск: deploy_hf.bat на Windows, `python scripts/deploy_hf.py` или GitHub Actions после тестов.
 Настройки берутся из окружения или из .env:
@@ -69,7 +70,14 @@ def main() -> int:
     api = HfApi(token=token)
     owner = os.getenv("HF_OWNER") or api.whoami()["name"]
     repo_id = f"{owner}/{os.getenv('HF_SPACE') or 'voice-assistant'}"
-    api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
+    try:
+        api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
+    except Exception as exc:
+        if "402" in str(exc):
+            print("Hugging Face размещает Docker Spaces только с подпиской PRO. Бесплатный вариант — Render,\n"
+                  "инструкция в README, раздел «Публичный стенд».")
+            return 1
+        raise
 
     gigachat = os.getenv("GIGACHAT_CREDENTIALS", "").strip()
     database = os.getenv("DEPLOY_DATABASE_URL", "").strip()

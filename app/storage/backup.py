@@ -17,6 +17,8 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 FILENAME = "assistant.db"
+AUTO_REPO = "auto"            # BACKUP_REPO=auto → <владелец токена>/voice-assistant-data
+DEFAULT_DATASET = "voice-assistant-data"
 
 
 def sqlite_file(url: str) -> Path | None:
@@ -63,6 +65,8 @@ class HubBackup:
     def restore(self) -> bool:
         """Скачать последнюю копию, если локальной базы нет. True — база восстановлена."""
         try:
+            if self.repo_id == AUTO_REPO:
+                self.repo_id = f"{self.api.whoami()['name']}/{DEFAULT_DATASET}"
             self.api.create_repo(self.repo_id, repo_type="dataset", private=True, exist_ok=True)
             if self.db_path.exists():
                 self._last_hash = self._snapshot_hash()
@@ -104,7 +108,7 @@ class HubBackup:
 
     def flush(self) -> bool:
         """Выгрузить копию, если база изменилась с прошлой выгрузки. True — выгружено."""
-        if not self.enabled or not self.db_path.exists():
+        if not self.enabled or not self.db_path.exists() or self.repo_id == AUTO_REPO:
             return False
         with self._lock:
             try:

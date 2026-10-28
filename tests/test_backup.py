@@ -39,6 +39,9 @@ class FakeHub:
     def super_squash_history(self, repo_id, repo_type):
         pass
 
+    def whoami(self):
+        return {"name": "Allorin"}
+
 
 def settings_for(db: Path):
     return replace(make_settings(seed=True), database_url=f"sqlite:///{db}")
@@ -93,3 +96,12 @@ def test_backup_only_for_sqlite_file_with_settings():
     assert "hf_x" not in repr(ready)
     assert sqlite_file("sqlite:///data/assistant.db") == Path("data/assistant.db")
     assert sqlite_file("sqlite://") is None and FILENAME == "assistant.db"
+
+
+def test_auto_repo_name_from_token_owner(tmp_path):
+    hub = FakeHub(tmp_path / "hub")
+    hub.folder.mkdir()
+    backup = HubBackup(tmp_path / "assistant.db", "auto", api=hub)
+    assert backup.flush() is False  # до restore имя датасета ещё не известно — ничего не выгружаем
+    backup.restore()
+    assert backup.repo_id == "Allorin/voice-assistant-data" and backup.enabled

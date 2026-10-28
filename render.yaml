@@ -1,0 +1,26 @@
+# Публичный стенд на Render (бесплатный тариф, без банковской карты).
+# Render → New → Blueprint → репозиторий voice-assistant: сервис создаётся по этому файлу,
+# значения с sync: false Render попросит ввести при создании (в репозиторий они не попадают).
+services:
+  - type: web
+    name: voice-assistant
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PUBLIC_DEMO          # у каждого посетителя свой гостевой профиль с демо-записями
+        value: "1"
+      - key: TIMEZONE
+        value: Europe/Moscow
+      - key: LLM_PROVIDER
+        value: gigachat
+      - key: LLM_TIMEOUT
+        value: "10"
+      - key: BACKUP_REPO          # копия базы в приватном датасете <ник>/voice-assistant-data
+        value: auto
+      - key: GIGACHAT_CREDENTIALS # ключ GigaChat (без него запросы разбирают правила)
+        sync: false
+      - key: HF_TOKEN             # токен Hugging Face с правом Write — для резервной копии базы
+        sync: false
