@@ -19,9 +19,12 @@ class FakeHub:
         self.uploads = 0
         self.private = None
 
-    def create_repo(self, repo_id, repo_type, private, exist_ok):
+    def repo_exists(self, repo_id, repo_type):
         if self.fail:
             raise ConnectionError("нет сети")
+        return self.private is not None
+
+    def create_repo(self, repo_id, repo_type, private, exist_ok):
         self.private = private
 
     def file_exists(self, repo_id, filename, repo_type):

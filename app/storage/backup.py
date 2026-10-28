@@ -67,7 +67,9 @@ class HubBackup:
         try:
             if self.repo_id == AUTO_REPO:
                 self.repo_id = f"{self.api.whoami()['name']}/{DEFAULT_DATASET}"
-            self.api.create_repo(self.repo_id, repo_type="dataset", private=True, exist_ok=True)
+            # токен может быть ограничен одним датасетом: создаём его, только если его ещё нет
+            if not self.api.repo_exists(self.repo_id, repo_type="dataset"):
+                self.api.create_repo(self.repo_id, repo_type="dataset", private=True, exist_ok=True)
             if self.db_path.exists():
                 self._last_hash = self._snapshot_hash()
                 return False

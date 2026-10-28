@@ -288,8 +288,9 @@ flowchart LR
 Прототип собирается из `Dockerfile`. Бесплатный стенд разворачивается на **Render** по `render.yaml`
 (без банковской карты, HTTPS есть сразу — без него браузер не даёт микрофон):
 
-1. Hugging Face (для хранения базы, см. ниже): зарегистрироваться, в *Settings → Access Tokens* создать
-   токен с правом **Write**.
+1. Hugging Face (для хранения базы, см. ниже): создать приватный датасет `voice-assistant-data`
+   (*New → Dataset → Private*), затем в *Settings → Access Tokens* — токен типа **Fine-grained**
+   с правом записи только в этот датасет. Так стенд не получает доступа к остальному аккаунту.
 2. [render.com](https://render.com) → войти через GitHub → *New → Blueprint* → выбрать репозиторий
    `voice-assistant`. Render прочитает `render.yaml` и попросит два значения:
    `GIGACHAT_CREDENTIALS` (ключ GigaChat; можно оставить пустым — тогда разбор правилами) и `HF_TOKEN`.
