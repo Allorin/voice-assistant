@@ -5,8 +5,9 @@
 - HF_TOKEN — токен Hugging Face с правом записи (обязательно);
 - HF_SPACE — имя Space, по умолчанию voice-assistant;
 - GIGACHAT_CREDENTIALS — ключ GigaChat (без него стенд разбирает запросы правилами);
-- DEPLOY_DATABASE_URL — постоянная база для стенда (Postgres, например Neon). Отдельное имя, чтобы локальный
-  запуск продолжал работать на своём SQLite.
+- DEPLOY_DATABASE_URL — необязательно: внешний Postgres для стенда (например, Neon). Без него стенд работает
+  на SQLite, а копия базы хранится в приватном датасете <пользователь>/<space>-data того же аккаунта
+  (токен передаётся стенду секретом HF_TOKEN). Отдельное имя, чтобы локальный запуск остался на своём SQLite.
 Секреты передаются в настройки Space и не попадают в его файлы.
 """
 from __future__ import annotations
@@ -25,7 +26,8 @@ from huggingface_hub import HfApi
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 # В Space нужно только то, из чего собирается образ, и README
-FILES = ["Dockerfile", ".dockerignore", "requirements.txt", "requirements-postgres.txt", "README.md",
+FILES = ["Dockerfile", ".dockerignore", "requirements.txt", "requirements-postgres.txt", "requirements-docker.txt",
+         "README.md",
          "data/events_seed.csv"]
 FOLDERS = ["app", "certs"]
 FRONT_MATTER = """---
@@ -73,8 +75,19 @@ def main() -> int:
     database = os.getenv("DEPLOY_DATABASE_URL", "").strip()
     if gigachat:
         api.add_space_secret(repo_id, "GIGACHAT_CREDENTIALS", gigachat)
+    backup_repo = ""
     if database:
         api.add_space_secret(repo_id, "DATABASE_URL", database)
+        try:
+            api.delete_space_variable(repo_id, "BACKUP_REPO")
+        except Exception:  # переменной ещё не было
+            pass
+    else:
+        # без внешней базы: SQLite на диске Space + копия в приватном датасете (app/storage/backup.py)
+        backup_repo = f"{repo_id}-data"
+        api.create_repo(backup_repo, repo_type="dataset", private=True, exist_ok=True)
+        api.add_space_secret(repo_id, "HF_TOKEN", token)
+        api.add_space_variable(repo_id, "BACKUP_REPO", backup_repo)
     variables = {"PUBLIC_DEMO": "1", "TIMEZONE": "Europe/Moscow", "LLM_TIMEOUT": "10",
                  "LLM_PROVIDER": "gigachat" if gigachat else "openai"}
     for key, value in variables.items():
@@ -91,7 +104,8 @@ def main() -> int:
                           commit_message=f"Версия {sha}")
     print(f"Space: https://huggingface.co/spaces/{repo_id}")
     print(f"Прототип: {space_url(repo_id)}")
-    db = "Postgres из DEPLOY_DATABASE_URL (постоянная)" if database else "SQLite в контейнере (сбрасывается при перезапуске)"
+    db = ("Postgres из DEPLOY_DATABASE_URL" if database
+          else f"SQLite, копия раз в минуту в приватном датасете https://huggingface.co/datasets/{backup_repo}")
     print(f"База: {db}")
     print(f"LLM: {'GigaChat' if gigachat else 'нет, работают правила'}")
     return 0

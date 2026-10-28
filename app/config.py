@@ -76,6 +76,10 @@ class Settings:
     # Публичный стенд: у каждого посетителя свой гостевой профиль с копией демо-записей
     public_demo: bool = False
 
+    # Резервная копия SQLite в приватном датасете Hugging Face (временный диск бесплатного Space)
+    backup_repo: str = ""
+    hf_token: str = field(default="", repr=False)
+
     def __post_init__(self):
         if self.llm_provider not in ("openai", "gigachat"):
             raise ValueError("LLM_PROVIDER должен быть openai или gigachat")
@@ -135,4 +139,6 @@ def get_settings() -> Settings:
         gigachat_model=_env("GIGACHAT_MODEL", "GigaChat-2-Max"),
         gigachat_ca_bundle_file=resolve_ca_bundle(_env("GIGACHAT_CA_BUNDLE_FILE")),
         public_demo=_env("PUBLIC_DEMO").lower() in ("1", "true", "yes", "on"),
+        backup_repo=_env("BACKUP_REPO"),
+        hf_token=_env("HF_TOKEN"),
     )

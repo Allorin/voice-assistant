@@ -19,6 +19,7 @@ from app.container import USER_ID_RX, Container, build
 from app.dialog import phrases as ph
 from app.models import Item
 from app.services.ics import build_calendar
+from app.storage.backup import HubBackup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 STATIC_DIR = BASE_DIR / "app" / "static"
@@ -29,13 +30,21 @@ container: Container | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global container
-    container = build(get_settings())
+    settings = get_settings()
+    backup = HubBackup.from_settings(settings)  # стенд на Hugging Face: база переживает перезапуск
+    if backup is not None:
+        backup.restore()
+    container = build(settings)
+    if backup is not None:
+        backup.start()
     url = os.getenv("OPEN_BROWSER_URL")
     if url:  # start.bat: открыть страницу, только когда сервер точно поднялся
         threading.Timer(1.0, webbrowser.open, args=[url]).start()
     try:
         yield
     finally:
+        if backup is not None:
+            backup.stop()
         if container.nlu.llm is not None:
             container.nlu.llm.close()
 

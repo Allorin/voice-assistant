@@ -5,9 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=7860
 
 WORKDIR /app
-COPY requirements.txt requirements-postgres.txt ./
-# psycopg — для постоянной базы Postgres через DATABASE_URL; без неё работает SQLite внутри контейнера
-RUN pip install --no-cache-dir -r requirements-postgres.txt
+COPY requirements.txt requirements-postgres.txt requirements-docker.txt ./
+# psycopg — для Postgres через DATABASE_URL; huggingface_hub — резервная копия SQLite в датасет (BACKUP_REPO)
+RUN pip install --no-cache-dir -r requirements-docker.txt
 
 COPY app ./app
 COPY certs ./certs
