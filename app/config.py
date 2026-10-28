@@ -81,10 +81,6 @@ class Settings:
     # Ключ для секретных ссылок подписки на календарь; если не задан — используется ACCESS_CODE
     calendar_key: str = field(default="", repr=False)
 
-    # Резервная копия SQLite в приватном датасете Hugging Face (временный диск бесплатного Space)
-    backup_repo: str = ""
-    hf_token: str = field(default="", repr=False)
-
     def __post_init__(self):
         if self.llm_provider not in ("openai", "gigachat"):
             raise ValueError("LLM_PROVIDER должен быть openai или gigachat")
@@ -154,6 +150,4 @@ def get_settings() -> Settings:
         public_demo=_env("PUBLIC_DEMO", "1" if on_amvera else "").lower() in ("1", "true", "yes", "on"),
         access_code=_env("ACCESS_CODE").strip("'\""),
         calendar_key=_env("CALENDAR_KEY").strip("'\""),
-        backup_repo=_env("BACKUP_REPO"),
-        hf_token=_env("HF_TOKEN"),
     )

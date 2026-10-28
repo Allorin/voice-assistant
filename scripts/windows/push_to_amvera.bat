@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+rem батник лежит в scripts\windows, работаем из корня проекта
+cd /d "%~dp0..\.."
 title Выкладка на Amvera
 where git >nul 2>&1 || (echo Git не найден. & pause & exit /b 1)
 

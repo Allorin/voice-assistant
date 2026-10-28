@@ -5,15 +5,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=7860
 
 WORKDIR /app
-COPY requirements.txt requirements-postgres.txt requirements-docker.txt ./
-# psycopg — для Postgres через DATABASE_URL; huggingface_hub — резервная копия SQLite в датасет (BACKUP_REPO)
-RUN pip install --no-cache-dir -r requirements-docker.txt
+COPY requirements.txt requirements-postgres.txt ./
+# psycopg — для внешнего Postgres через DATABASE_URL; без него база — SQLite (на Amvera — на постоянном диске /data)
+RUN pip install --no-cache-dir -r requirements-postgres.txt
 
 COPY app ./app
 COPY certs ./certs
 COPY data/events_seed.csv ./data/events_seed.csv
 
-# Hugging Face Spaces запускает контейнер не от root — даём права на папку с базой
+# папка для локальной базы; хостинг может запускать контейнер не от root
 RUN mkdir -p /app/data && chmod -R 777 /app/data
 
 EXPOSE 7860

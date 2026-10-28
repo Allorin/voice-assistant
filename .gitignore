@@ -17,6 +17,5 @@ push_to_github.bat
 sync_from_github.bat
 .commit_msg.txt
 eval/results/warnings.txt
-deploy_log.txt
 tests_log.txt
 amvera_log.txt

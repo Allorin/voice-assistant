@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+rem батник лежит в scripts\windows, работаем из корня проекта
+cd /d "%~dp0..\.."
 title Проверка понимания фраз
 set PYTHONUTF8=1
 set PY=.venv\Scripts\python.exe
