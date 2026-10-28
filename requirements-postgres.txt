@@ -1,0 +1,3 @@
+# Для облачного Postgres (Neon, Supabase и др.) через DATABASE_URL. Ставится в Docker-образе.
+-r requirements.txt
+psycopg[binary]>=3.2,<4

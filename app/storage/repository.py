@@ -5,10 +5,11 @@ from collections.abc import Iterable
 from datetime import date, datetime
 
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Item, ItemStatus, ItemType, NewItem
-from app.storage.db import ItemRow
+from app.storage.db import ItemRow, UserRow
 
 
 def _parse_dates(value: str | None) -> list[date]:
@@ -215,6 +216,19 @@ class ItemRepository:
         with self._sf() as s:
             row = s.scalars(stmt).first()
             return _to_item(row) if row else None
+
+    def ensure_user(self, user_id: str, now: datetime) -> bool:
+        """Запомнить профиль. True — профиль встретился впервые."""
+        with self._sf() as s:
+            if s.get(UserRow, user_id) is not None:
+                return False
+            s.add(UserRow(id=user_id, created_at=now))
+            try:
+                s.commit()
+            except IntegrityError:  # тот же профиль одновременно создал другой запрос
+                s.rollback()
+                return False
+            return True
 
     def count(self, user_id: str | None = None) -> int:
         with self._sf() as s:

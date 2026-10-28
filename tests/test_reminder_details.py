@@ -53,8 +53,9 @@ def test_save_cancel_and_new_command_during_details(empty_container):
     say("Напомни завтра в 10 купить молоко")
     assert say("отмена").intent == "cancel" and empty_container.repo.count() == 1
     say("Напомни завтра в 11 купить билеты")
-    assert say("Что у меня завтра?").intent == "list"
-    assert empty_container.repo.count() == 1
+    r = say("Что у меня завтра?")  # необязательные вопросы не мешают: запись сохраняется, затем ответ на вопрос
+    assert r.intent == "list" and r.text.startswith("Хорошо, напомню завтра в 11:00: «Купить билеты»")
+    assert empty_container.repo.count() == 2
 
 
 def test_missing_time_is_asked_before_optional_details(empty_container):
@@ -104,7 +105,8 @@ def test_new_command_interrupts_lead_question(empty_container):
     say("пропустить")
     r = say("Добавь задачу учиться 2 часа завтра")
     assert r.intent == "create" and r.items[0].type == ItemType.TASK
-    assert empty_container.repo.count() == 1
+    assert "Купить молоко" in r.text.split("\n")[0]  # сначала сказано, что напоминание сохранено
+    assert empty_container.repo.count() == 2
 
 
 def test_lead_reply_can_start_with_remind_me(empty_container):
@@ -180,3 +182,13 @@ def test_existing_database_migrates_without_losing_records(tmp_path):
     updated = repo.update("demo", 1, NOW, notes="Подробности", remind_before_min=10)
     assert updated.remind_at == datetime(2026, 10, 21, 9, 50)
     factory.kw["bind"].dispose()
+
+
+def test_question_instead_of_conflict_answer_does_not_move_the_meeting(empty_container):
+    def say(text):
+        return empty_container.dialog.handle("s", text)
+    say("Добавь встречу с дизайнером завтра в 11")
+    assert say("Поставь встречу с командой завтра в 11:30").awaiting == "confirm"
+    r = say("Что у меня на этой неделе?")
+    assert r.intent == "list" and r.text.startswith("«Встреча с командой» не сохранено")
+    assert empty_container.repo.count() == 1

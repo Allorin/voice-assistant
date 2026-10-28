@@ -2,6 +2,8 @@
 
     python scripts/eval_nlu.py              # правила
     python scripts/eval_nlu.py --nlu llm    # LLM из .env (GigaChat или OpenAI-совместимый API) + страховка правилами
+    python scripts/eval_nlu.py --nlu llm-only   # только LLM, без подстраховки правилами
+    python scripts/eval_nlu.py --file eval/holdout.jsonl   # отложенный набор: на нём ничего не настраивали
 
 «Сейчас» зафиксировано: вторник, 20.10.2026 19:59 — как в тестах.
 """
@@ -10,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -65,24 +68,35 @@ def check(cmd, exp: dict) -> list[str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--nlu", choices=["rules", "llm"], default="rules")
+    ap.add_argument("--nlu", choices=["rules", "llm", "llm-only"], default="rules")
     ap.add_argument("--file", default=str(ROOT / "eval" / "phrases.jsonl"))
     args = ap.parse_args()
 
     llm = None
-    if args.nlu == "llm":
+    if args.nlu in ("llm", "llm-only"):
         s = get_settings()
         if not s.llm_enabled:
             sys.exit("LLM не настроена: заполните GIGACHAT_CREDENTIALS (LLM_PROVIDER=gigachat) "
                      "или LLM_BASE_URL и LLM_MODEL в .env")
         llm = create_llm(s)
     nlu = HybridNLU(RuleNLU(), llm)
+    mode = nlu.mode if args.nlu != "llm-only" else "llm-only"
 
     rows = [json.loads(line) for line in Path(args.file).read_text(encoding="utf-8").splitlines() if line.strip()]
     ok_intent = ok_full = 0
-    llm_answers = 0
+    llm_answers = llm_errors = 0
+    started = time.perf_counter()
     for row in rows:
-        cmd = nlu.parse(row["text"], NLUContext(now=NOW))
+        ctx = NLUContext(now=NOW)
+        if args.nlu == "llm-only":
+            try:
+                cmd = llm.parse(row["text"], ctx)
+            except Exception as exc:  # ошибка сети или ответа: считаем фразу неразобранной
+                llm_errors += 1
+                print(f"ERR  {row['text']}\n       {exc}")
+                continue
+        else:
+            cmd = nlu.parse(row["text"], ctx)
         llm_answers += cmd.source == "llm"
         errors = check(cmd, row)
         ok_intent += cmd.intent.value == row["intent"]
@@ -90,10 +104,14 @@ def main() -> None:
         mark = "OK  " if not errors else "FAIL"
         print(f"{mark} {row['text']}" + ("" if not errors else f"\n       {'; '.join(errors)}"))
     n = len(rows)
-    print(f"\nNLU: {nlu.mode}. Фраз: {n}. Интент верно: {ok_intent}/{n} ({ok_intent / n:.0%}). "
-          f"Все поля верно: {ok_full}/{n} ({ok_full / n:.0%}).")
-    if llm is not None:
-        print(f"Ответов LLM: {llm_answers}/{n}; ответов правил вместо LLM: {n - llm_answers}/{n}.")
+    per_phrase = (time.perf_counter() - started) / max(n, 1)
+    print(f"\nNLU: {mode}. Набор: {Path(args.file).name}. Фраз: {n}. "
+          f"Интент верно: {ok_intent}/{n} ({ok_intent / n:.0%}). Все поля верно: {ok_full}/{n} ({ok_full / n:.0%}). "
+          f"В среднем {per_phrase:.2f} с на фразу.")
+    if args.nlu == "llm":
+        print(f"LLM: ответов модели {llm_answers}/{n}; ответов правил вместо модели {n - llm_answers}/{n}.")
+    if args.nlu == "llm-only":
+        print(f"LLM: ошибок запроса {llm_errors}/{n}.")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,9 @@ def main() -> int:
         return 0
     except Exception as exc:
         # Не выводим тело HTTP-ответа и заголовки: в них могут находиться ключи и токены.
-        print(f"Подключение не прошло ({type(exc).__name__}). Проверьте ключ, scope, сеть и TLS-сертификаты.")
+        # Сообщения вида «GigaChat: HTTP 401; …» уже очищены в app/nlu/gigachat.py — их показываем.
+        reason = str(exc) if str(exc).startswith("GigaChat:") else type(exc).__name__
+        print(f"Подключение не прошло ({reason}). Проверьте ключ, scope, сеть и TLS-сертификаты.")
         print("При ошибке сертификата задайте GIGACHAT_CA_BUNDLE_FILE: путь к PEM-файлу "
               "с официальным корневым сертификатом НУЦ Минцифры.")
         return 1

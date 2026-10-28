@@ -19,6 +19,31 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+CERT_DIRS = (BASE_DIR / ".certs", BASE_DIR / "certs")
+
+
+def resolve_ca_bundle(value: str) -> str:
+    """Сертификат НУЦ Минцифры для GigaChat.
+
+    Путь из .env может быть относительным (от папки проекта). Если файла нет, например в .env
+    остался путь с чужого компьютера, берётся первый сертификат из .certs/ или certs/.
+    Ничего не нашлось: пустая строка, используются системные сертификаты.
+    """
+    if value:
+        path = Path(value)
+        path = path if path.is_absolute() else BASE_DIR / path
+        if path.is_file():
+            return str(path)
+        logging.getLogger(__name__).warning(
+            "GIGACHAT_CA_BUNDLE_FILE: файл %s не найден, ищу сертификат в папке .certs", value)
+    for folder in CERT_DIRS:
+        for pattern in ("*.pem", "*.crt", "*.cer"):
+            found = sorted(folder.glob(pattern))
+            if found:
+                return str(found[0])
+    return ""
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -47,6 +72,9 @@ class Settings:
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat-2-Max"
     gigachat_ca_bundle_file: str = ""
+
+    # Публичный стенд: у каждого посетителя свой гостевой профиль с копией демо-записей
+    public_demo: bool = False
 
     def __post_init__(self):
         if self.llm_provider not in ("openai", "gigachat"):
@@ -105,5 +133,6 @@ def get_settings() -> Settings:
         gigachat_credentials=_env("GIGACHAT_CREDENTIALS"),
         gigachat_scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
         gigachat_model=_env("GIGACHAT_MODEL", "GigaChat-2-Max"),
-        gigachat_ca_bundle_file=_env("GIGACHAT_CA_BUNDLE_FILE"),
+        gigachat_ca_bundle_file=resolve_ca_bundle(_env("GIGACHAT_CA_BUNDLE_FILE")),
+        public_demo=_env("PUBLIC_DEMO").lower() in ("1", "true", "yes", "on"),
     )

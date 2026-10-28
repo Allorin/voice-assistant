@@ -7,6 +7,7 @@ import threading
 import webbrowser
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, File, Header, HTTPException, Path, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -14,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import BASE_DIR, get_settings
-from app.container import Container, build
+from app.container import USER_ID_RX, Container, build
 from app.dialog import phrases as ph
 from app.models import Item
 from app.services.ics import build_calendar
@@ -48,7 +49,15 @@ def c() -> Container:
 
 
 def _user(x_user_id: str | None) -> str:
-    return (x_user_id or "").strip()[:64] or c().settings.default_user
+    """Профиль из заголовка X-User-Id. Браузер кодирует кириллицу (encodeURIComponent): раскодируем."""
+    raw = x_user_id if isinstance(x_user_id, str) else ""  # при прямом вызове функции тут объект Header
+    user = unquote(raw.strip()).strip()
+    if not user:
+        return c().settings.default_user
+    if not USER_ID_RX.match(user):
+        raise HTTPException(400, "Имя профиля: до 64 букв, цифр и знаков . @ - _")
+    c().prepare_user(user)
+    return user
 
 
 class ItemOut(BaseModel):
@@ -206,17 +215,21 @@ async def stt(file: UploadFile = File(...)):
 
 
 @app.get("/api/status")
-def status():
+def status(x_user_id: str | None = Header(default=None)):
     s = c().settings
+    user = _user(x_user_id)
     return {
         "nlu": c().nlu.mode,
-        "llm_model": s.active_llm_model,
+        "llm_model": s.active_llm_model if c().nlu.llm is not None else None,
         "stt_server": s.stt_enabled,
         "semantic_embeddings": s.embeddings_enabled,
         "now": c().service.now().isoformat(),
         "timezone": s.timezone,
-        "items": c().repo.count(),
-        "calendar_path": f"/calendar/{s.default_user}.ics",
+        "items": c().repo.count(user),
+        "user": user,
+        "default_user": s.default_user,
+        "public_demo": s.public_demo,
+        "calendar_path": f"/calendar/{quote(user)}.ics",
     }
 
 

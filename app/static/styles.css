@@ -291,6 +291,10 @@ h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
 .setting-check input { width: 18px; height: 18px; flex: none; margin: 3px 0 0; accent-color: var(--accent); }
 .setting-help { margin: 8px 0 14px; color: var(--muted); font-size: 13px; }
 .preview-btn { width: 100%; padding: 12px; border: none; border-radius: 12px; background: var(--accent); color: var(--accent-ink); font-weight: 500; cursor: pointer; }
+.profile-form { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.profile-row { display: flex; gap: 8px; }
+.setting-field .profile-row input { flex: 1; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font: inherit; }
+.profile-btn { flex: none; padding: 10px 14px; border: 1px solid var(--accent); border-radius: 10px; background: transparent; color: var(--accent); font: inherit; font-weight: 500; cursor: pointer; }
 
 /* ---------- телефон ---------- */
 

@@ -96,7 +96,44 @@ def tokenize(text: str) -> list[Tok]:
         if pw in _TENS and (cw in _UNITS or (cw in _ORDINALS and _ORDINALS[cw] < 10)):
             prev.norm = str(_TENS[pw] + (_UNITS.get(cw) or _ORDINALS[cw]))
             cur.norm = ""
+    _join_spoken_minutes(toks)
     return toks
+
+
+def _join_spoken_minutes(toks: list[Tok]) -> None:
+    """«в восемь тридцать» → 8:30, «в четырнадцать ноль ноль» → 14:00, «к семи пятнадцати» → 7:15."""
+    def word(t: Tok) -> str:
+        return t.text.lower().replace("ё", "е")
+
+    for i in range(1, len(toks) - 1):
+        hour, w = toks[i], word(toks[i])
+        if word(toks[i - 1]) not in ("в", "к", "до", "с", "со") or w[0].isdigit() or not hour.norm.isdigit():
+            continue
+        if int(hour.norm) > 23:
+            continue
+        j = i + 1
+        while j < len(toks) and toks[j].norm == "":  # «двадцать три» уже склеено в 23
+            j += 1
+        if j >= len(toks):
+            continue
+        mw = word(toks[j])
+        minutes, used = None, []
+        if mw in _TEENS or mw in _TENS:
+            glued = [k for k in range(j + 1, len(toks)) if toks[k].norm == ""][:1]
+            if glued and word(toks[glued[0]]) in _ORDINALS:
+                continue  # «в пять двадцать пятого» — это дата, а не 5:25
+            minutes, used = int(toks[j].norm), [j, *glued]
+        elif mw == "ноль" and j + 1 < len(toks):
+            nw = word(toks[j + 1])
+            if nw == "ноль":
+                minutes, used = 0, [j, j + 1]
+            elif nw in _UNITS:
+                minutes, used = _UNITS[nw], [j, j + 1]
+        if minutes is None or minutes > 59:
+            continue
+        hour.norm = f"{hour.norm}:{minutes:02d}"
+        for k in used:
+            toks[k].norm = ""
 
 
 class _Text:

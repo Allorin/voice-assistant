@@ -115,3 +115,71 @@ def test_provider_configuration_and_status(giga, monkeypatch):
 def test_unknown_provider_is_rejected():
     with pytest.raises(ValueError, match="LLM_PROVIDER"):
         replace(make_settings(False), llm_provider="giga_typo")
+
+
+def _some_root_pem() -> str:
+    import certifi
+
+    text = open(certifi.where(), encoding="ascii", errors="ignore").read()
+    start = text.index("-----BEGIN CERTIFICATE-----")
+    end = text.index("-----END CERTIFICATE-----", start) + len("-----END CERTIFICATE-----")
+    return text[start:end] + "\n"
+
+
+@pytest.mark.parametrize("fmt", ["pem", "der"])
+def test_ca_bundle_accepts_pem_and_der(tmp_path, fmt):
+    pem = _some_root_pem()
+    path = tmp_path / f"root.{'pem' if fmt == 'pem' else 'cer'}"
+    if fmt == "pem":
+        path.write_text(pem, encoding="ascii")
+    else:
+        path.write_bytes(ssl.PEM_cert_to_DER_cert(pem))
+    nlu = GigaChatNLU(CREDENTIALS, ca_bundle_file=str(path))
+    try:
+        assert nlu.client._settings.ssl_context.cert_store_stats()["x509_ca"] >= 1
+    finally:
+        nlu.close()
+
+
+def test_ca_bundle_path_from_other_computer_falls_back_to_certs_folder(tmp_path, monkeypatch, caplog):
+    from app import config
+
+    certs = tmp_path / ".certs"
+    certs.mkdir()
+    (certs / "russian_trusted_root_ca_pem.crt").write_text(_some_root_pem(), encoding="ascii")
+    monkeypatch.setattr(config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(config, "CERT_DIRS", (certs,))
+    found = config.resolve_ca_bundle("C:/Users/Samir/Desktop/ХАКАТОН/voice-assistant/.certs/root.pem")
+    assert found == str(certs / "russian_trusted_root_ca_pem.crt")
+    assert "не найден" in caplog.text
+    assert config.resolve_ca_bundle(".certs/russian_trusted_root_ca_pem.crt") == found  # относительный путь
+    monkeypatch.setattr(config, "CERT_DIRS", (tmp_path / "empty",))
+    assert config.resolve_ca_bundle("") == ""
+
+
+def test_broken_llm_setup_does_not_stop_the_app(monkeypatch, caplog):
+    from app.clock import FixedClock
+    from app.container import build
+
+    def broken(*_):
+        raise FileNotFoundError("нет файла сертификата")
+
+    monkeypatch.setattr("app.nlu.gigachat.GigaChatNLU", broken)
+    settings = replace(make_settings(False), llm_provider="gigachat", gigachat_credentials=CREDENTIALS)
+    container = build(settings, FixedClock(NOW))
+    assert container.nlu.llm is None and container.nlu.mode == "rules"
+    assert "работают правила" in caplog.text
+    assert container.dialog.handle("s", "Напомни завтра в 10 позвонить Ивану").intent == "create"
+
+
+def test_sdk_ignores_stale_ca_path_from_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", "C:/Users/Samir/Desktop/ХАКАТОН/voice-assistant/.certs/x.pem")
+    nlu = GigaChatNLU(CREDENTIALS)
+    try:
+        assert not nlu.client._settings.ca_bundle_file
+        calls = mock_http(nlu)
+        assert nlu.parse(PHRASE, NLUContext(now=NOW)).source == "llm" and calls["chat"]
+        from gigachat.client import _get_kwargs
+        assert _get_kwargs(nlu.client._settings)["verify"] is nlu.client._settings.ssl_context
+    finally:
+        nlu.close()

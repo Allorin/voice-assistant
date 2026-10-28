@@ -55,6 +55,8 @@ class Session:
     pending: Pending | None = None
     history: list[tuple[str, str]] = field(default_factory=list)
     touched: float = field(default_factory=_time.monotonic)
+    # итог прерванного уточнения («сохранено …» / «не сохранено …»): добавляется к ответу на новую команду
+    carry: object | None = None
 
 
 class SessionStore:

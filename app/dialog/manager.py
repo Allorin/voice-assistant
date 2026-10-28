@@ -24,7 +24,7 @@ from app.timeparse.ru import TimeInfo, creation_moment, parse, tokenize
 _YES = re.compile(r"^(?:да|ага|угу|конечно|давай|ок|окей|хорошо|подтверждаю|верно|всё\s+равно|все\s+равно"
                   r"|добавляй|добавь|оставь|сохраняй|сохрани|yes)\b", re.IGNORECASE)
 _NO = re.compile(r"^(?:нет|неа|не\s+надо|не\s+нужно|не\s+стоит|отмена|отмени|no)\b", re.IGNORECASE)
-_CANCEL = re.compile(r"^(?:отмена|отмени(?:ть)?|стоп|хватит|не\s+надо|не\s+нужно|забудь|неважно)\b[\s.!]*$",
+_CANCEL = re.compile(r"^(?:(?:отмена|отмени(?:ть)?|стоп|хватит|не\s+надо|не\s+нужно|забудь|неважно)\b[\s,.!]*)+$",
                      re.IGNORECASE)
 _THANKS = re.compile(r"^(?:спасибо|благодарю|спс|отлично|супер|класс|круто)", re.IGNORECASE)
 _SCOPE_SERIES_ANSWER = re.compile(r"\b(?:вс[её]|всю|всех|сери\w*|целиком|всегда|навсегда|насовсем|каждую|каждый"
@@ -126,8 +126,18 @@ class DialogManager:
             cmd = self.nlu.parse(text, ctx)
             reply = self._dispatch(s, user, cmd, text, now)
             reply.nlu = cmd.source
+        if s.carry is not None:
+            reply = self._with_carry(s.carry, reply)
+            s.carry = None
         s.history = (s.history + [(text, reply.text)])[-6:]
         return reply
+
+    @staticmethod
+    def _with_carry(before: Reply, reply: Reply) -> Reply:
+        """Ответ на новую команду, перед которым сказано, чем закончилось прерванное уточнение."""
+        return Reply(f"{before.text}\n\n{reply.text}", f"{before.speech} {reply.speech}", items=reply.items,
+                     intent=reply.intent, awaiting=reply.awaiting, nlu=reply.nlu,
+                     changed=[*before.changed, *reply.changed])
 
     def _dispatch(self, s: Session, user: str, cmd: Command, text: str, now: datetime) -> Reply:
         if cmd.intent == Intent.CREATE:
@@ -316,8 +326,14 @@ class DialogManager:
 
         if p.kind == "confirm":
             new_command = self._is_new_command(text, now)
-            if new_command is not None and new_command.intent == Intent.CREATE:
+            if new_command is not None and new_command.intent in (Intent.CREATE, Intent.LIST, Intent.SEARCH,
+                                                                  Intent.HELP):
+                # вместо «да/нет» — новый вопрос или запись: неподтверждённое действие не выполняется
                 s.pending = None
+                if p.action == "create" and p.draft is not None:
+                    s.carry = Reply(f"«{p.draft.title}» не сохранено: пересечение не подтверждено.", intent="cancel")
+                elif p.action == "update" and p.candidates:
+                    s.carry = Reply(f"Перенос «{p.candidates[0].title}» отменён.", intent="cancel")
                 return None
 
         if p.kind == "confirm" and p.action == "update" and p.candidates:
@@ -401,8 +417,7 @@ class DialogManager:
                               "без подробностей", "пока не надо")
         lead_answer = p.slot == "remind_before" and re.match(r"^(?:напомни(?:ть)?(?: мне)?\s+)?за\b", low)
         if not skip and not lead_answer and self._is_new_command(text, now):
-            s.pending = None
-            return None
+            return self._save_interrupted(s, user, d, now)
         if save:
             d.details_done = d.lead_done = True
         elif p.slot == "details":
@@ -415,13 +430,22 @@ class DialogManager:
                                            "в момент", "без опережения") else self._lead_minutes(text)
             if minutes is None:
                 if self._is_new_command(text, now):
-                    s.pending = None
-                    return None
+                    return self._save_interrupted(s, user, d, now)
                 return Reply("Назовите интервал от 0 минут до 7 дней, например «за 15 минут», "
                              "или ответьте «пропустить».", intent="clarify", awaiting=p.slot)
             d.remind_before_min = minutes
             d.lead_done = True
         return self._proceed(s, user, d, now)
+
+    def _save_interrupted(self, s: Session, user: str, d: Draft, now: datetime) -> None:
+        """Подробности не дождались новой команды: запись сохраняется как есть, затем выполняется команда."""
+        d.details_done = d.lead_done = True
+        d.conflicts_ok = True  # о пересечении скажет текст ответа
+        saved = self._proceed(s, user, d, now)
+        s.pending = None
+        if saved.intent == "create":
+            s.carry = saved
+        return None
 
     @classmethod
     def _lead_minutes(cls, text: str) -> int | None:

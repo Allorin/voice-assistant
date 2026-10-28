@@ -14,6 +14,14 @@ class Base(DeclarativeBase):
     pass
 
 
+class UserRow(Base):
+    """Профили. Записи хранятся в items с user_id; здесь — кто уже заходил (демо-данные выдаются один раз)."""
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class ItemRow(Base):
     __tablename__ = "items"
 
@@ -49,12 +57,24 @@ _ADDED_COLUMNS = {
 }
 
 
+def normalize_url(url: str) -> str:
+    """Строку подключения из панели Neon/Supabase («postgresql://…») ведём через драйвер psycopg 3."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def make_engine(url: str) -> Engine:
+    url = normalize_url(url)
     kwargs: dict = {}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
         if url in ("sqlite://", "sqlite:///:memory:"):
             kwargs["poolclass"] = StaticPool  # одна БД в памяти на все потоки (тесты)
+    else:
+        # облачный Postgres закрывает простаивающие соединения: проверяем их перед использованием
+        kwargs.update(pool_pre_ping=True, pool_recycle=300)
     return create_engine(url, **kwargs)
 
 

@@ -1,0 +1,27 @@
+{"text": "слушай поставь мне на четверг в шесть вечера тренировку в зале", "intent": "create", "due": "2026-10-22T18:00"}
+{"text": "надо до конца месяца сдать отчёт по налогам", "intent": "create", "item_type": "task", "title": "Сдать отчёт по налогам", "due": "2026-10-31T00:00"}
+{"text": "напомни через полтора часа забрать заказ", "intent": "create", "item_type": "reminder", "title": "Забрать заказ", "due": "2026-10-20T21:29"}
+{"text": "созвон с маркетингом в понедельник с 10 до 11", "intent": "create", "item_type": "meeting", "title": "Созвон с маркетингом", "due": "2026-10-26T10:00"}
+{"text": "завтра в обед встреча с Петром", "intent": "create", "item_type": "meeting", "title": "Встреча с Петром"}
+{"text": "запиши купить корм коту", "intent": "create", "item_type": "task", "title": "Купить корм коту"}
+{"text": "каждую субботу в 10 утра уборка", "intent": "create", "title": "Уборка", "repeat": "FREQ=WEEKLY;INTERVAL=1;BYDAY=SA"}
+{"text": "по будням в 9:15 стендап с командой", "intent": "create", "title": "Стендап с командой", "repeat": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR"}
+{"text": "что у меня в пятницу утром", "intent": "list"}
+{"text": "покажи все задачи на эту неделю", "intent": "list", "item_type": "task", "period_start": "2026-10-19T00:00"}
+{"text": "какие встречи были в прошлом месяце", "intent": "list", "item_type": "meeting", "period_start": "2026-09-01T00:00", "tense": "past"}
+{"text": "что запланировано на 5 ноября", "intent": "list", "period_start": "2026-11-05T00:00"}
+{"text": "есть ли у меня что-то послезавтра", "intent": "list", "period_start": "2026-10-22T00:00"}
+{"text": "найди встречи с Ольгой", "intent": "search", "item_type": "meeting", "query": "ольга"}
+{"text": "когда я в последний раз созванивался с Альфой", "intent": "search", "query": "альфа", "tense": "past"}
+{"text": "когда следующая планёрка", "intent": "search", "query": "планерка", "tense": "future"}
+{"text": "я ставил задачу про акт сверки, найди", "intent": "search", "item_type": "task", "query": "акт"}
+{"text": "перенеси созвон с маркетингом на вторник", "intent": "update", "due": "2026-10-27T00:00"}
+{"text": "сдвинь уборку на 11", "intent": "update"}
+{"text": "удали встречу с Петром", "intent": "delete"}
+{"text": "убери напоминание про заказ", "intent": "delete"}
+{"text": "отметь тренировку как выполненную", "intent": "complete"}
+{"text": "уборку сделал", "intent": "complete"}
+{"text": "сними галочку с уборки", "intent": "reopen"}
+{"text": "не надо, отмени", "intent": "cancel"}
+{"text": "как тобой пользоваться", "intent": "help"}
+{"text": "доброе утро", "intent": "smalltalk"}

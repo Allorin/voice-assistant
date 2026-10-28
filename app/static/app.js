@@ -13,6 +13,7 @@ const els = {
   voiceSelect: $("voiceSelect"), voiceRate: $("voiceRate"), voiceVolume: $("voiceVolume"),
   rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
   detailsEnabled: $("detailsEnabled"), voicePreview: $("voicePreview"), voiceStatus: $("voiceStatus"),
+  profileForm: $("profileForm"), profileName: $("profileName"), profileHelp: $("profileHelp"), icsDownload: $("icsDownload"),
 };
 
 const store = {
@@ -20,15 +21,18 @@ const store = {
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* приватный режим */ } },
 };
 
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+
 const state = {
-  sessionId: store.get("sessionId", null) || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)),
+  sessionId: store.get("sessionId", null) || newId(),
+  profile: store.get("profile", ""),  // "" — профиль сервера по умолчанию
   speak: store.get("speak", true),
   audioSettings: (() => {
     const saved = store.get("audioSettings", {}) || {};
     const number = (v, fallback, min, max) => typeof v === "number" && Number.isFinite(v)
       ? Math.max(min, Math.min(max, v)) : fallback;
     return { voice: typeof saved.voice === "string" ? saved.voice : "", rate: number(saved.rate, 1.05, 0.7, 1.4),
-      volume: number(saved.volume, 1, 0, 1), bell: saved.bell !== false, details: saved.details !== false };
+      volume: number(saved.volume, 1, 0, 1), bell: saved.bell !== false, details: saved.details === true };  // уточнения — по желанию
   })(),
   listening: false,
   busy: false,
@@ -39,8 +43,11 @@ store.set("sessionId", state.sessionId);
 
 /* ---------------------------------------------------------------- API */
 
+// Профиль уходит в заголовке; кириллицу заголовок не пропускает, поэтому кодируем
+const userHeaders = () => (state.profile ? { "X-User-Id": encodeURIComponent(state.profile) } : {});
+
 async function api(path, options = {}) {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const res = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...userHeaders() } });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
   return res.json();
 }
@@ -240,7 +247,7 @@ async function startRecording() {
     const form = new FormData();
     form.append("file", new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" }), "speech.webm");
     try {
-      const res = await fetch("/api/stt", { method: "POST", body: form });
+      const res = await fetch("/api/stt", { method: "POST", body: form, headers: userHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "ошибка распознавания");
       hint("");
@@ -441,14 +448,46 @@ async function copyCalendarLink() {
     : `Ссылка скопирована: ${url}. В Google Календаре: «Другие календари» → «Добавить по URL».`);
 }
 
+/* ---------------------------------------------------------------- профили */
+
+function setProfile(id) {
+  state.profile = id;
+  store.set("profile", id);
+  state.sessionId = newId();  // контекст диалога другого профиля не переносим
+  store.set("sessionId", state.sessionId);
+}
+
+async function switchProfile(name) {
+  const id = name.trim().replace(/\s+/g, "-");
+  if (!/^[\p{L}\p{N}_.@-]{1,64}$/u.test(id)) {
+    els.profileHelp.textContent = "Имя профиля: буквы, цифры и знаки . @ - _, до 64 символов.";
+    return;
+  }
+  if (state.status && id === state.status.user) { els.settings.close(); return; }
+  setProfile(id);
+  for (const msg of els.log.querySelectorAll(".msg")) msg.remove();
+  els.empty.hidden = false;
+  await loadStatus();
+  loadAgenda();
+  checkReminders();
+  els.settings.close();
+  showToast(`Профиль «${id}». Записей: ${state.status ? state.status.items : 0}.`);
+}
+
 /* ---------------------------------------------------------------- старт */
 
 async function loadStatus() {
   try {
     state.status = await api("/api/status");
+    if (!state.profile && state.status.public_demo) {
+      // публичный стенд: у каждого посетителя свой гостевой профиль с копией демо-записей
+      setProfile(`гость-${Math.random().toString(36).slice(2, 6)}`);
+      state.status = await api("/api/status");
+    }
     const nlu = state.status.llm_model ? `разбор запросов: ${state.status.llm_model} + правила` : "разбор запросов: правила";
     const voice = SR ? "голос: браузер" : state.status.stt_server ? "голос: сервер" : "голос: недоступен в этом браузере";
-    els.status.textContent = `${nlu}, ${voice}`;
+    els.status.textContent = `профиль: ${state.status.user} · ${nlu}, ${voice}`;
+    els.icsDownload.href = `${state.status.calendar_path}?download=true`;
   } catch {
     els.status.textContent = "Сервер недоступен";
   }
@@ -461,7 +500,12 @@ async function loadStatus() {
 els.composer.addEventListener("submit", (e) => { e.preventDefault(); send(els.input.value); });
 els.mic.addEventListener("click", () => (state.listening ? stopListening() : startListening()));
 els.speakToggle.addEventListener("click", () => { setSpeak(!state.speak); if (state.speak) audio.unlock(); });
-els.settingsOpen.addEventListener("click", () => { updateVoices(); syncAudioSettings(); els.settings.showModal(); });
+els.settingsOpen.addEventListener("click", () => {
+  updateVoices(); syncAudioSettings();
+  els.profileName.value = (state.status && state.status.user) || state.profile;
+  els.settings.showModal();
+});
+els.profileForm.addEventListener("submit", (e) => { e.preventDefault(); switchProfile(els.profileName.value); });
 els.settingsClose.addEventListener("click", () => els.settings.close());
 for (const control of [els.voiceSelect, els.voiceRate, els.voiceVolume, els.bellEnabled, els.detailsEnabled]) {
   control.addEventListener(control.type === "range" ? "input" : "change", saveAudioSettings);

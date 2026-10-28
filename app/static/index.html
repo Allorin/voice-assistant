@@ -27,9 +27,9 @@
           </div>
         </div>
         <div class="head-actions">
-          <button class="icon-btn" id="settingsOpen" type="button" aria-haspopup="dialog" title="Настройки озвучки и напоминаний">
+          <button class="icon-btn" id="settingsOpen" type="button" aria-haspopup="dialog" title="Профиль и настройки озвучки">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
-            <span class="sr-only">Настройки озвучки</span>
+            <span class="sr-only">Профиль и настройки</span>
           </button>
           <button class="icon-btn" id="speakToggle" type="button" aria-pressed="true" title="Озвучивать ответы">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path class="wave" d="M16 8.5a4.5 4.5 0 0 1 0 7M18.5 6a8 8 0 0 1 0 12"/></svg>
@@ -77,16 +77,25 @@
       </header>
       <div id="agendaList" class="agenda-list"></div>
       <footer class="agenda-foot">
-        <a href="/api/calendar.ics" download="planner.ics">Скачать .ics</a>
+        <a href="/api/calendar.ics" id="icsDownload" download="planner.ics">Скачать .ics</a>
         <button type="button" id="icsCopy">Ссылка для подписки</button>
       </footer>
     </aside>
   </div>
   <dialog class="settings" id="voiceSettings" aria-labelledby="settingsTitle">
     <div class="settings-head">
-      <h2 id="settingsTitle">Озвучка и напоминания</h2>
+      <h2 id="settingsTitle">Профиль и озвучка</h2>
       <button class="icon-btn" id="settingsClose" type="button" aria-label="Закрыть настройки">✕</button>
     </div>
+    <form class="profile-form" id="profileForm" autocomplete="off">
+      <label class="setting-field" for="profileName">Профиль
+        <span class="profile-row">
+          <input id="profileName" type="text" maxlength="64" spellcheck="false" placeholder="например, Алиса">
+          <button class="profile-btn" type="submit">Сменить</button>
+        </span>
+      </label>
+      <p class="setting-help" id="profileHelp">У каждого профиля свои задачи и встречи. Введите имя, чтобы переключиться или создать профиль.</p>
+    </form>
     <label class="setting-field" for="voiceSelect">Голос
       <select id="voiceSelect"><option value="">Автоматически · русский голос</option></select>
     </label>
@@ -98,7 +107,7 @@
     </label>
     <p class="setting-help">Громкость звука также зависит от настроек браузера и Windows.</p>
     <label class="setting-check"><input id="bellEnabled" type="checkbox" checked>Колокольчик перед напоминанием</label>
-    <label class="setting-check"><input id="detailsEnabled" type="checkbox" checked>Уточнять подробности при создании</label>
+    <label class="setting-check"><input id="detailsEnabled" type="checkbox">Уточнять подробности при создании</label>
     <p class="setting-help">Ассистент предложит добавить подробности и выбрать, за сколько напомнить. Можно ответить «пропустить» или «сохранить».</p>
     <button class="preview-btn" id="voicePreview" type="button">Прослушать пример</button>
     <p class="setting-help" id="voiceStatus" role="status">Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.</p>
