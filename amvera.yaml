@@ -1,0 +1,11 @@
+# Публичный стенд на Amvera (российский хостинг, открывается без VPN).
+# Сборка по Dockerfile; постоянный диск /data хранит базу (app/config.py выбирает его сам, когда AMVERA=1).
+meta:
+  environment: docker
+  toolchain:
+    name: docker
+build:
+  dockerfile: Dockerfile
+run:
+  persistenceMount: /data
+  containerPort: 7860   # тот же порт, что PORT в Dockerfile

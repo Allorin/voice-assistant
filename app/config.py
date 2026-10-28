@@ -117,7 +117,10 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
-    default_db = f"sqlite:///{BASE_DIR / 'data' / 'assistant.db'}"
+    # На Amvera (переменная AMVERA=1) постоянный диск смонтирован в /data, стенд публичный
+    on_amvera = _env("AMVERA") == "1"
+    default_db = "sqlite:////data/assistant.db" if on_amvera else f"sqlite:///{BASE_DIR / 'data' / 'assistant.db'}"
+    gigachat_key = _env("GIGACHAT_CREDENTIALS")
     return Settings(
         database_url=_env("DATABASE_URL", default_db),
         timezone=_env("TIMEZONE", "Europe/Moscow"),
@@ -133,12 +136,13 @@ def get_settings() -> Settings:
         embeddings_base_url=_env("EMBEDDINGS_BASE_URL"),
         embeddings_api_key=_env("EMBEDDINGS_API_KEY", "none"),
         embeddings_model=_env("EMBEDDINGS_MODEL"),
-        llm_provider=_env("LLM_PROVIDER", "openai").lower(),
-        gigachat_credentials=_env("GIGACHAT_CREDENTIALS"),
+        # задан только ключ GigaChat — значит, работаем через GigaChat
+        llm_provider=_env("LLM_PROVIDER", "gigachat" if gigachat_key else "openai").lower(),
+        gigachat_credentials=gigachat_key,
         gigachat_scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
         gigachat_model=_env("GIGACHAT_MODEL", "GigaChat-2-Max"),
         gigachat_ca_bundle_file=resolve_ca_bundle(_env("GIGACHAT_CA_BUNDLE_FILE")),
-        public_demo=_env("PUBLIC_DEMO").lower() in ("1", "true", "yes", "on"),
+        public_demo=_env("PUBLIC_DEMO", "1" if on_amvera else "").lower() in ("1", "true", "yes", "on"),
         backup_repo=_env("BACKUP_REPO"),
         hf_token=_env("HF_TOKEN"),
     )
