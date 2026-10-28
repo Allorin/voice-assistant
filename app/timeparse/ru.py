@@ -24,10 +24,12 @@ Prefer = str  # "future" | "past" | "nearest"
 # --------------------------------------------------------------------------- токены
 
 _TOKEN_RE = re.compile(
-    r"\d{1,2}:\d{2}"
+    r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+"          # почта целиком: dani+dsa@gmail.com
+    r"|(?:https?://|www\.)\S+"                   # ссылка целиком
+    r"|\d{1,2}:\d{2}"
     r"|\d+(?:[./\-]\d+)*(?:-?(?:го|ое|е))?"
     r"|[a-zа-яё]+(?:-[a-zа-яё]+)*"
-    r"|[^\s\w]",
+    r"|\S",
     re.IGNORECASE,
 )
 
@@ -221,11 +223,16 @@ class TimeInfo:
 
 
 def join_tokens(toks: list[Tok]) -> str:
+    """Склеить токены обратно в текст. Токены, которые в исходной фразе шли вплотную («+7», «a-b?x=1»),
+    остаются вплотную; между остальными — пробел, кроме знаков препинания."""
     out = ""
+    prev: Tok | None = None
     for t in toks:
-        if out and not re.fullmatch(r"[,.!?;:»)]", t.text) and not out.endswith(("«", "(")):
+        touching = prev is not None and prev.end == t.start
+        if out and not touching and not re.fullmatch(r"[,.!?;:»)]", t.text) and not out.endswith(("«", "(")):
             out += " "
         out += t.text
+        prev = t
     return out.strip()
 
 

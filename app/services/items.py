@@ -174,6 +174,15 @@ class ItemService:
         start = datetime.combine(self.now().date(), time())
         return self._in_range(user, start, start + timedelta(days=days), None, None)
 
+    def undated(self, user: str, limit: int = 30) -> list[Item]:
+        """Записи без срока для плана: сначала невыполненные (новые сверху), затем отмеченные сегодня."""
+        today = self.now().date()
+        items = self.repo.list_undated(user)
+        open_items = [it for it in items if it.status == ItemStatus.OPEN]
+        done_today = [it for it in items if it.status == ItemStatus.DONE and it.updated_at.date() == today]
+        open_items.sort(key=lambda it: (it.created_at, it.id), reverse=True)
+        return (open_items + done_today)[:limit]
+
     def due_reminders(self, user: str, since: datetime, until: datetime) -> list[Item]:
         types = [ItemType.REMINDER, ItemType.MEETING]
         lead = max((it.remind_before_min for it in self.repo.list_all(user) if it.type in types), default=0)

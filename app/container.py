@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.access import AccessGuard
 from app.clock import Clock
 from app.config import Settings
 from app.dialog.manager import DialogManager
@@ -35,6 +36,7 @@ class Container:
     nlu: HybridNLU
     dialog: DialogManager
     stt: SpeechToText | None
+    access: AccessGuard = field(default_factory=AccessGuard)
     _known_users: set[str] = field(default_factory=set)
     _users_lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -85,4 +87,4 @@ def build(settings: Settings, clock: Clock | None = None) -> Container:
     stt = SpeechToText(settings.stt_base_url, settings.stt_api_key, settings.stt_model) \
         if settings.stt_enabled else None
     dialog = DialogManager(nlu, service, SessionStore(), settings.default_user)
-    return Container(settings, repo, service, nlu, dialog, stt)
+    return Container(settings, repo, service, nlu, dialog, stt, AccessGuard(settings.access_code))

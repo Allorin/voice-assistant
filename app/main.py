@@ -1,6 +1,7 @@
 """HTTP API (FastAPI) и раздача веб-интерфейса."""
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import threading
@@ -9,11 +10,12 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from urllib.parse import quote, unquote
 
-from fastapi import FastAPI, File, Header, HTTPException, Path, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, File, Header, HTTPException, Path, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.access import calendar_token
 from app.config import BASE_DIR, get_settings
 from app.container import USER_ID_RX, Container, build
 from app.dialog import phrases as ph
@@ -50,6 +52,21 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Голосовой ежедневник", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def access_code(request: Request, call_next):
+    """Стенд с ACCESS_CODE: запросы к /api только с верным кодом (страница спросит его один раз)."""
+    if request.url.path.startswith("/api/") and container is not None and container.access.enabled:
+        supplied = unquote(request.headers.get("x-access-code", "")).strip()
+        client = request.client.host if request.client else "?"
+        status = container.access.check(client, supplied)
+        if status == 429:
+            return JSONResponse({"detail": "Слишком много неверных попыток. Подождите минуту."}, status_code=429)
+        if status == 401:
+            detail = "Неверный код доступа" if supplied else "Нужен код доступа"
+            return JSONResponse({"detail": detail, "access_code_required": True}, status_code=401)
+    return await call_next(request)
 
 
 def c() -> Container:
@@ -141,6 +158,12 @@ def upcoming(days: int = 7, x_user_id: str | None = Header(default=None)):
     return [item_out(i) for i in c().service.upcoming(_user(x_user_id), max(1, min(days, 60)))]
 
 
+@app.get("/api/items/undated", response_model=list[ItemOut])
+def undated(x_user_id: str | None = Header(default=None)):
+    """Задачи без срока: в плане они идут отдельным блоком под ближайшими днями."""
+    return [item_out(i) for i in c().service.undated(_user(x_user_id))]
+
+
 @app.get("/api/items/search", response_model=list[ItemOut])
 def search(q: str, limit: int = 20, x_user_id: str | None = Header(default=None)):
     hits = c().service.search(_user(x_user_id), q)
@@ -203,9 +226,19 @@ def calendar_for_header_user(download: bool = True, x_user_id: str | None = Head
 
 
 @app.get("/calendar/{user_id}.ics")
-def calendar_subscription(user_id: str = Path(pattern=r"^[\w.@-]{1,64}$"), download: bool = False):
-    """Ссылка для подписки из Google / Яндекс / Apple Календаря (календарь не умеет слать заголовки)."""
+def calendar_subscription(user_id: str = Path(pattern=r"^[\w.@-]{1,64}$"), download: bool = False,
+                          token: str = ""):
+    """Ссылка для подписки из Google / Яндекс / Apple Календаря (календарь не умеет слать заголовки).
+    На стенде с ключом ссылка содержит секретный token, без него — 404, как будто календаря нет."""
+    expected = calendar_token(c().settings.calendar_secret, user_id)
+    if expected and not hmac.compare_digest(token, expected):
+        raise HTTPException(404, "Календарь не найден")
     return _calendar(user_id, download)
+
+
+def calendar_path(user: str) -> str:
+    token = calendar_token(c().settings.calendar_secret, user)
+    return f"/calendar/{quote(user)}.ics" + (f"?token={token}" if token else "")
 
 
 @app.post("/api/stt")
@@ -238,7 +271,7 @@ def status(x_user_id: str | None = Header(default=None)):
         "user": user,
         "default_user": s.default_user,
         "public_demo": s.public_demo,
-        "calendar_path": f"/calendar/{quote(user)}.ics",
+        "calendar_path": calendar_path(user),
     }
 
 

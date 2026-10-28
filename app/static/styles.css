@@ -322,3 +322,7 @@ h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- код доступа ---------- */
+.access h2 { margin: 0 0 8px; font-size: 19px; }
+.access::backdrop { background: #080e1acc; }

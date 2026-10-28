@@ -19,3 +19,4 @@ sync_from_github.bat
 eval/results/warnings.txt
 deploy_log.txt
 tests_log.txt
+amvera_log.txt

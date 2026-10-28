@@ -32,8 +32,14 @@ _SCOPE_SERIES_ANSWER = re.compile(r"\b(?:вс[её]|всю|всех|сери\w*|
 _SCOPE_ONE_ANSWER = re.compile(r"\b(?:только|одн\w*|один|ближайш\w*|эту|это|этот|е[её]|его|перв\w*|разово|раз)\b",
                                re.IGNORECASE)
 _ORDINAL_WORDS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3, "пят": 4}
-_BULK_YES = re.compile(r"^(?:да(?:[,\s]+(?:удали(?:ть)?|удаляй)(?:\s+вс[её])?)?|подтверждаю(?:\s+удаление)?"
-                       r"|удали(?:ть)?|удаляй|yes)[\s.!]*$", re.IGNORECASE)
+# «да», «да да», «да, удалить», «подтверждаю», «удаляй всё»
+_BULK_YES = re.compile(r"^(?:(?:да|ага|угу|конечно|подтверждаю(?:\s+удаление)?|yes)[\s,.!]*)*"
+                       r"(?:(?:да|ага|угу|конечно|подтверждаю(?:\s+удаление)?|yes)"
+                       r"|(?:удали(?:ть)?|удаляй)(?:\s+(?:вс[её]|их))?)[\s.!]*$", re.IGNORECASE)
+# «за всё время» в ответ на «за какой период удалить?»
+_ALL_TIME = re.compile(r"^(?:за\s+)?(?:вс[её](?:\s+время)?|вообще\s+вс[её]|все\s+сразу|все\s+записи|везде"
+                       r"|без\s+периода|любой\s+период|целиком)[\s.!]*$", re.IGNORECASE)
+ALL_TIME = (datetime(1900, 1, 1), datetime(2200, 1, 1))
 
 _QUESTION_FOR = {Intent.UPDATE: "Какую перенести?", Intent.DELETE: "Какую удалить?",
                  Intent.COMPLETE: "Какую отметить выполненной?", Intent.REOPEN: "С какой снять отметку?"}
@@ -76,6 +82,25 @@ def parse_ordinal(text: str, n: int) -> int | None:
     if idx is not None and 0 <= idx < n:
         return idx
     return None
+
+
+_ALL_CHOICES = re.compile(r"^(?:да[,\s]+)?(?:(?:удали|отметь|сними|верни)\w*\s+)?(?:вс[её]|всех|оба|обе|обоих"
+                          r"|все\s+(?:эти|варианты|записи|задачи|встречи|напоминания)|и\s+т(?:у|о)\s+и\s+друг\w+)"
+                          r"(?:\s+(?:эти|варианты|записи|задачи|встречи|напоминания|сразу))*[\s.!]*$", re.IGNORECASE)
+_MANY_ORDINALS = re.compile(r"\b(?:\d|перв|втор|трет|четв[её]рт|пят)\w*", re.IGNORECASE)
+
+
+def parse_choices(text: str, n: int) -> list[int] | None:
+    """Несколько вариантов сразу: «все», «обе», «первую и вторую», «1 и 3». None — выбран один или ничего."""
+    low = text.lower().replace("ё", "е").strip()
+    if _ALL_CHOICES.match(low):
+        return list(range(n))
+    picks: list[int] = []
+    for word in _MANY_ORDINALS.findall(low):
+        idx = parse_ordinal(word, n)
+        if idx is not None and idx not in picks:
+            picks.append(idx)
+    return sorted(picks) if len(picks) > 1 else None
 
 
 def query_label(query: str) -> str:
@@ -378,7 +403,13 @@ class DialogManager:
                 return None
             if p.action == "create" and p.draft is not None:
                 if p.slot == "title":
-                    p.draft.title = clean_title(text, p.draft.type) or text.strip()
+                    # ответ бывает целой командой: «на послезавтра добавь купить хлеб» — берём из неё название
+                    again = self.rules.parse(text, NLUContext(now=now))
+                    title = again.title if again.intent == Intent.CREATE and again.title else None
+                    p.draft.title = title or clean_title(text, p.draft.type) or text.strip()
+                    when = parse(again.when or "", now, "future") if title else None
+                    if when is not None and when.found and not p.draft.has_date:
+                        return self._fill_time(s, user, p.draft, when, now)
                     return self._proceed(s, user, p.draft, now)
                 info = parse(text, now, "future")
                 if info.found or info.error:
@@ -521,8 +552,12 @@ class DialogManager:
                            occ_day=day)
 
     def _continue_choice(self, s: Session, user: str, p: Pending, text: str, now: datetime) -> Reply | None:
-        idx = parse_ordinal(text, len(p.candidates))
         cmd = p.command if isinstance(p.command, Command) else Command(intent=Intent(p.action))
+        many = parse_choices(text, len(p.candidates))
+        if many is not None and cmd.intent in (Intent.DELETE, Intent.COMPLETE, Intent.REOPEN):
+            s.pending = None  # «все», «первую и вторую» — действие для каждой из названных записей
+            return self._apply_many(s, user, cmd, [p.candidates[i] for i in many], p.text or text, now)
+        idx = parse_ordinal(text, len(p.candidates))
         items = [it for it in (self.service.get(user, i) for i in p.candidates) if it]
         if idx is None and _SCOPE_SERIES_ANSWER.search(text):
             # «всю серию» в ответ на «какую?» — выбираем повторяющуюся запись
@@ -547,6 +582,31 @@ class DialogManager:
         s.pending = None
         return self._apply(s, user, cmd.intent, p.candidates[idx], cmd, p.text or text, now,
                            occ_day=self._phrase_day(cmd.occurrence, now))
+
+    def _apply_many(self, s: Session, user: str, cmd: Command, ids: list[int], text: str, now: datetime) -> Reply:
+        done: list[Reply] = []
+        skipped: list[str] = []
+        for item_id in ids:
+            item = self.service.get(user, item_id)
+            if item is None:
+                continue
+            if item.rule is not None and cmd.intent == Intent.DELETE and not cmd.scope:
+                skipped.append(item.title)  # у серии нужно уточнить: одно повторение или всю
+                continue
+            reply = self._apply(s, user, cmd.intent, item_id, cmd, text, now,
+                                occ_day=self._phrase_day(cmd.occurrence, now))
+            s.pending = None
+            done.append(reply)
+        lines = [r.text for r in done]
+        if skipped:
+            names = ", ".join(f"«{t}»" for t in skipped)
+            lines.append(f"Повторяющиеся записи {names} не тронуты: назовите их отдельно и скажите, "
+                         f"одно повторение или всю серию.")
+        if not lines:
+            return Reply("Этих записей уже нет.", intent=cmd.intent.value)
+        return Reply("\n".join(lines), " ".join(r.speech or "" for r in done) or lines[-1],
+                     items=[i for r in done for i in r.items], intent=cmd.intent.value,
+                     changed=[i for r in done for i in r.changed])
 
     # ================================================================ список и поиск
 
@@ -680,6 +740,8 @@ class DialogManager:
 
     @staticmethod
     def _bulk_label(period: tuple[datetime, datetime], now: datetime) -> str:
+        if period == ALL_TIME:
+            return "за всё время"
         start, end = period
         last_day = (end - timedelta(microseconds=1)).date()
         dates = start.strftime("%d.%m.%Y")
@@ -690,7 +752,14 @@ class DialogManager:
         return f"{ph.period_label(start, end, now.date())} ({dates})"
 
     def _bulk_items(self, user: str, cmd: Command, period: tuple[datetime, datetime]) -> list[Item]:
-        items = self.service.list_period(user, *period, cmd.item_type)
+        if period == ALL_TIME:
+            # за всё время — только разовые записи: серию не разворачиваем на века, её удаляют отдельно
+            types = [cmd.item_type] if cmd.item_type else None
+            items = self.service.repo.list_between(user, None, None, types, recurring=False)
+            if cmd.item_type in (None, ItemType.TASK):
+                items += self.service.repo.list_undated(user)  # и задачи без срока
+        else:
+            items = self.service.list_period(user, *period, cmd.item_type)
         if cmd.status:
             items = [it for it in items if it.status.value == cmd.status]
         if cmd.query:
@@ -704,9 +773,10 @@ class DialogManager:
             info = parse(cmd.period or "", now, "nearest")
             period = info.query_range()
             if info.error or period is None or (not info.has_date and info.period is None):
-                q = info.error or "За какой период удалить записи? Например, «сегодня», «завтра» или «на этой неделе»."
+                q = info.error or ("За какой период удалить записи? Например, «сегодня», «на этой неделе» "
+                                   "или «за всё время».")
                 return self._ask(s, q, Pending("slot", "bulk_delete", q, slot="period", command=cmd), "period")
-        if period[1] - period[0] > timedelta(days=366):
+        if period != ALL_TIME and period[1] - period[0] > timedelta(days=366):
             q = "Выберите период не длиннее года. За какой период удалить записи?"
             return self._ask(s, q, Pending("slot", "bulk_delete", q, slot="period", command=cmd), "period")
         items = self._bulk_items(user, cmd, period)
@@ -714,12 +784,15 @@ class DialogManager:
         if not items:
             s.pending = None
             return Reply(f"За период «{label}» подходящих записей нет. Ничего не удалено.", intent="delete")
-        lines = [f"{note}Удалить записи за период «{label}»? Найдено: {ph.count_phrase(len(items), cmd.item_type)}."]
+        what = "за всё время" if period == ALL_TIME else f"за период «{label}»"
+        lines = [f"{note}Удалить записи {what}? Найдено: {ph.count_phrase(len(items), cmd.item_type)}."]
         lines += [f"• {ph.item_line(it, now.date())}" for it in items[:5]]
         if len(items) > 5:
             lines.append(f"…и ещё {len(items) - 5}.")
         if any(it.occurrence for it in items):
             lines.append("У повторяющихся записей будут удалены только даты в этом периоде.")
+        if period == ALL_TIME and self.service.repo.list_recurring(user, [cmd.item_type] if cmd.item_type else None):
+            lines.append("Повторяющиеся серии не затрагиваются — их можно удалить отдельно.")
         lines.append("Подтвердите: «да, удалить» или «нет».")
         q = "\n".join(lines)
         pending = Pending("confirm", "bulk_delete", q, command=cmd, selection=items, period=period)
@@ -745,6 +818,8 @@ class DialogManager:
             return Reply(f"Удалено: {ph.count_phrase(len(p.selection), cmd.item_type)}. "
                          f"Период: {self._bulk_label(p.period, now)}.", intent="delete",
                          changed=list(dict.fromkeys(it.id for it in p.selection)))
+        if p.kind == "slot" and _ALL_TIME.match(answer):
+            return self._bulk_delete(s, user, cmd, now, ALL_TIME)
         if self._is_new_command(text, now):
             s.pending = None
             return None

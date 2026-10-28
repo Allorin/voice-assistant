@@ -76,6 +76,11 @@ class Settings:
     # Публичный стенд: у каждого посетителя свой гостевой профиль с копией демо-записей
     public_demo: bool = False
 
+    # Общий код доступа к стенду: без него /api отвечает 401 (app/access.py). Пусто — доступ открыт
+    access_code: str = field(default="", repr=False)
+    # Ключ для секретных ссылок подписки на календарь; если не задан — используется ACCESS_CODE
+    calendar_key: str = field(default="", repr=False)
+
     # Резервная копия SQLite в приватном датасете Hugging Face (временный диск бесплатного Space)
     backup_repo: str = ""
     hf_token: str = field(default="", repr=False)
@@ -93,6 +98,10 @@ class Settings:
             logging.getLogger(__name__).warning(
                 "Часовой пояс %s не найден (pip install tzdata), используется системный", self.timezone)
             return datetime.now().astimezone().tzinfo or timezone.utc
+
+    @property
+    def calendar_secret(self) -> str:
+        return self.calendar_key or self.access_code
 
     @property
     def llm_enabled(self) -> bool:
@@ -120,7 +129,7 @@ def get_settings() -> Settings:
     # На Amvera (переменная AMVERA=1) постоянный диск смонтирован в /data, стенд публичный
     on_amvera = _env("AMVERA") == "1"
     default_db = "sqlite:////data/assistant.db" if on_amvera else f"sqlite:///{BASE_DIR / 'data' / 'assistant.db'}"
-    gigachat_key = _env("GIGACHAT_CREDENTIALS")
+    gigachat_key = _env("GIGACHAT_CREDENTIALS").strip("'\"")  # ключ, вставленный в панель хостинга в кавычках
     return Settings(
         database_url=_env("DATABASE_URL", default_db),
         timezone=_env("TIMEZONE", "Europe/Moscow"),
@@ -143,6 +152,8 @@ def get_settings() -> Settings:
         gigachat_model=_env("GIGACHAT_MODEL", "GigaChat-2-Max"),
         gigachat_ca_bundle_file=resolve_ca_bundle(_env("GIGACHAT_CA_BUNDLE_FILE")),
         public_demo=_env("PUBLIC_DEMO", "1" if on_amvera else "").lower() in ("1", "true", "yes", "on"),
+        access_code=_env("ACCESS_CODE").strip("'\""),
+        calendar_key=_env("CALENDAR_KEY").strip("'\""),
         backup_repo=_env("BACKUP_REPO"),
         hf_token=_env("HF_TOKEN"),
     )

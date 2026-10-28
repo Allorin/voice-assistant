@@ -58,14 +58,16 @@ SHIFT_RX = _rx(r"на\s+(?:(?P<n>\d+(?:\.5)?)\s+)?(?P<unit>час\w*|минут\
                r"(?P<dir>позже|раньше|вперед|вперёд|назад)")
 _ON_WORD = re.compile(r"(?<![а-яё])на(?![а-яё])", re.IGNORECASE)
 _QUESTION_HEAD = _rx(r"^(?:какие|какая|какой|что|сколько|покажи\w*|есть\s+ли|список)\b")
-_DELETE = _rx(r"\b(?:удали(?:те|ть)?\b|удаляй(?:те)?\b|убери\b|уберите\b|убрать\b|сотри\b|стереть\b|вычеркни\b|пропусти(?:те|ть)?\b"
+_DELETE = _rx(r"\b(?:удали(?:те|ть)?\b|удаляй(?:те)?\b|удаляю\b|убери\b|уберите\b|убрать\b|убирай(?:те)?\b|убираю\b|сотри\b|стереть\b|вычеркни\b|пропусти(?:те|ть)?\b"
               r"|отмени(?:ть)?\s+(?:мне\s+)?(?:встреч|задач|напомин|созвон|планерк|планёрк|ее|её|его|это|эту|последн"
               r"|только|ближайш|завтрашн|сегодняшн|все|всё|планы|дела|записи|расписание))")
-_DELETE_ALL = _rx(r"\b(?:удали\w*|удалить|убери|уберите|убрать|сотри|стереть|вычеркни|отмени(?:ть)?)\s+"
+_DELETE_ALL = _rx(r"\b(?:удали\w*|удаляю|удаляй|удалить|убери|уберите|убрать|убира(?:й|йте|ю)|сотри|стереть|вычеркни|отмени(?:ть)?)\s+"
                   r"(?:(?:мне|пожалуйста)\s+)*(?:вс[её]|всех)\b")
-_DELETE_PLURAL = _rx(r"\b(?:удали\w*|удалить|убери|уберите|убрать|сотри|стереть|вычеркни|отмени(?:ть)?)\s+"
+_DELETE_PLURAL = _rx(r"\b(?:удали\w*|удаляю|удаляй|удалить|убери|уберите|убрать|убира(?:й|йте|ю)|сотри|стереть|вычеркни|отмени(?:ть)?)\s+"
                      r"(?:(?:мне|мои|пожалуйста|все|всё|всех)\s+)*"
                      r"(?:планы|дела|встречи|встреч|задачи|задач|напоминания|напоминаний|записи|записей|события|расписание)\b")
+_PLURAL_FIRST = _rx(r"^(?:(?:а|и|ну|так)\s+)?(?:(?:вс[её]|мои|все\s+мои)\s+)?(?:планы|дела|встречи|задачи|напоминания"
+                   r"|записи|события|созвоны|планерки|планёрки)\b")
 # «в пятницу созвона не будет» — удаление, только если названо, чего именно не будет
 _NOT_HAPPEN = _rx(r"\bне\s+будет\b|\bне\s+состоится|\bотменяется\b")
 _COMPLETE = _rx(r"(?:\b(?:отметь|пометь|отмечай|помечай|поставь|сделай)\b.*\b(?:выполн|сделан|готов|заверш)"
@@ -145,6 +147,7 @@ _QUERY_STOP = set("""
 пожалуйста еще ещё ну так давно раньше недавно ранее старую старые старой такой такая такую
 перенеси перенести передвинь сдвинь подвинь отложи перемести смести измени изменить поменяй поменять исправь
 удали удалить убери убрать сотри вычеркни отмени отменить отметь пометь отмечай помечай поставь сделай
+убирай убирайте убираю удаляй удаляю удалите уберите добавь добавить добавлю запиши записать запланируй
 выполненной выполненным выполненную выполнено выполнена выполнен выполнил выполнила сделанной сделано
 сделал сделала готово готовой завершенной завершённой завершил завершила закрой закрыть закрыл закрыла
 сделана сделан выполнена готова закрыта закрыт напомни напомнить
@@ -225,7 +228,7 @@ def extract_query(info: TimeInfo) -> str:
         if i in info.consumed:
             continue
         w = t.text.lower().replace("ё", "е")
-        if not re.search(r"\w", w) or w in _QUERY_STOP:
+        if not re.search(r"\w", w) or w in _QUERY_STOP or fix_key_typos(w) in _QUERY_STOP:
             continue
         words.append(t)
     return join_tokens(words)
@@ -257,10 +260,33 @@ def _ordinal_free(query: str) -> str:
                   flags=re.IGNORECASE).strip()
 
 
+_KEY_WORDS = ("встречи", "встреча", "встречу", "задачи", "задача", "задачу", "напоминания", "напоминание",
+              "созвоны", "планерки", "записи", "удали", "перенеси", "напомни", "добавь", "отметь")
+
+
+def fix_key_typos(low: str) -> str:
+    """«встечи удали» → «встречи удали»: исправляем только слова, которых нет в словаре, и только
+    на близкие ключевые слова команд. Существующие слова («встречаю», «удалил») не трогаем."""
+    from rapidfuzz import fuzz, process
+
+    from app.search.text import is_known_word
+
+    def fix(m: re.Match) -> str:
+        word = m.group(0)
+        if len(word) < 5 or is_known_word(word):
+            return word
+        best = process.extractOne(word, _KEY_WORDS, scorer=fuzz.ratio, score_cutoff=84)
+        if not best or best[0].startswith(word) or word.startswith(best[0][:-1]):
+            return word  # «созвон» — другая форма того же слова, а не опечатка
+        return best[0]
+
+    return re.sub(r"[а-яё]+", fix, low)
+
+
 class RuleNLU:
     def parse(self, text: str, ctx: NLUContext) -> Command:
         text = text.strip()
-        low = re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip()
+        low = fix_key_typos(re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip())
         if not low:
             return Command(intent=Intent.UNKNOWN)
 
@@ -382,7 +408,7 @@ class RuleNLU:
             cmd.occurrence = info.phrase or None
         query = _ordinal_free(extract_query(info))
         deletion = _DELETE.search(low) if intent == Intent.DELETE else None
-        if deletion and (_DELETE_PLURAL.match(low, deletion.start()) or (
+        if deletion and (_DELETE_PLURAL.match(low, deletion.start()) or _PLURAL_FIRST.match(low) or (
                 _DELETE_ALL.match(low, deletion.start()) and (info.found or info.error or not query))):
             cmd.bulk = True
             cmd.period = info.phrase or None

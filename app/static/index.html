@@ -112,6 +112,18 @@
     <button class="preview-btn" id="voicePreview" type="button">Прослушать пример</button>
     <p class="setting-help" id="voiceStatus" role="status">Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.</p>
   </dialog>
+  <dialog class="settings access" id="accessDialog" aria-labelledby="accessTitle">
+    <form id="accessForm" autocomplete="off">
+      <h2 id="accessTitle">Код доступа</h2>
+      <p class="setting-help" id="accessHelp">Стенд закрыт кодом, чтобы запросы к языковой модели не тратил кто угодно. Код есть в материалах к заданию.</p>
+      <label class="setting-field" for="accessCode">
+        <span class="profile-row">
+          <input id="accessCode" type="password" maxlength="200" spellcheck="false" autocomplete="current-password" required>
+          <button class="profile-btn" type="submit">Войти</button>
+        </span>
+      </label>
+    </form>
+  </dialog>
   <div class="toast" id="toast" role="alert" hidden></div>
   <script src="/static/audio.js"></script>
   <script src="/static/app.js"></script>

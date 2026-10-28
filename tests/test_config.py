@@ -32,3 +32,8 @@ def test_gigachat_key_alone_selects_gigachat(monkeypatch):
     s = settings(monkeypatch, GIGACHAT_CREDENTIALS="key")
     assert s.llm_provider == "gigachat" and s.llm_enabled
     assert settings(monkeypatch, GIGACHAT_CREDENTIALS="key", LLM_PROVIDER="openai").llm_provider == "openai"
+
+
+def test_quotes_around_gigachat_key_are_removed(monkeypatch):
+    assert settings(monkeypatch, GIGACHAT_CREDENTIALS="'abc=='").gigachat_credentials == "abc=="
+    assert settings(monkeypatch, GIGACHAT_CREDENTIALS='"abc=="').gigachat_credentials == "abc=="

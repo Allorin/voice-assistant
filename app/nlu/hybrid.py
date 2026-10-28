@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.nlu.rules import RuleNLU, is_time_correction
+from app.nlu.rules import RuleNLU, clean_title, is_time_correction
 from app.nlu.schema import Command, Intent, NLUContext
 from app.timeparse.repeat import parse_repeat
 from app.timeparse.ru import parse as parse_time
@@ -81,6 +81,9 @@ class HybridNLU:
                 cmd.when = by_rules.when or cmd.when
             if cmd.intent == Intent.CREATE and not cmd.title:
                 cmd.title = by_rules.title
+        if cmd.intent == Intent.CREATE and cmd.title:
+            # LLM иногда оставляет команду в названии: «Добавь почту …» → «Почту …»
+            cmd.title = clean_title(cmd.title, cmd.item_type) or cmd.title
             if cmd.intent == Intent.CREATE and by_rules.repeat and (
                     not cmd.repeat or parse_repeat(cmd.repeat).rule is None):
                 cmd.repeat = by_rules.repeat  # LLM не заметила повторение или написала его по-своему

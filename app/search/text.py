@@ -56,6 +56,10 @@ for _w, _exp in EXPANSIONS.items():
 
 
 @lru_cache(maxsize=100_000)
+def is_known_word(word: str) -> bool:
+    return _morph.word_is_known(word)
+
+
 def lemma(word: str) -> str:
     w = word.lower().replace("ё", "е")
     if w.isdigit() or not re.search(r"[а-я]", w):

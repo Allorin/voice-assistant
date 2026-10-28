@@ -14,6 +14,7 @@ const els = {
   rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
   detailsEnabled: $("detailsEnabled"), voicePreview: $("voicePreview"), voiceStatus: $("voiceStatus"),
   profileForm: $("profileForm"), profileName: $("profileName"), profileHelp: $("profileHelp"), icsDownload: $("icsDownload"),
+  access: $("accessDialog"), accessForm: $("accessForm"), accessCode: $("accessCode"), accessHelp: $("accessHelp"),
 };
 
 const store = {
@@ -26,6 +27,7 @@ const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.rando
 const state = {
   sessionId: store.get("sessionId", null) || newId(),
   profile: store.get("profile", ""),  // "" — профиль сервера по умолчанию
+  accessCode: store.get("accessCode", ""),  // код доступа к стенду, если он задан на сервере
   speak: store.get("speak", true),
   audioSettings: (() => {
     const saved = store.get("audioSettings", {}) || {};
@@ -44,13 +46,52 @@ store.set("sessionId", state.sessionId);
 /* ---------------------------------------------------------------- API */
 
 // Профиль уходит в заголовке; кириллицу заголовок не пропускает, поэтому кодируем
-const userHeaders = () => (state.profile ? { "X-User-Id": encodeURIComponent(state.profile) } : {});
+const userHeaders = () => ({
+  ...(state.profile ? { "X-User-Id": encodeURIComponent(state.profile) } : {}),
+  ...(state.accessCode ? { "X-Access-Code": encodeURIComponent(state.accessCode) } : {}),
+});
+
+class AccessError extends Error {}
 
 async function api(path, options = {}) {
   const res = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...userHeaders() } });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401 && body.access_code_required) {
+      askAccessCode(state.accessCode ? "Код не подошёл. Введите код доступа ещё раз." : "");
+      throw new AccessError(body.detail || "Нужен код доступа");
+    }
+    throw new Error(body.detail || `Ошибка ${res.status}`);
+  }
   return res.json();
 }
+
+/* ---------------------------------------------------------------- код доступа */
+
+function askAccessCode(message) {
+  if (message) els.accessHelp.textContent = message;
+  if (!els.access.open) {
+    els.access.showModal();
+    els.accessCode.focus();
+  }
+}
+
+els.accessForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  state.accessCode = els.accessCode.value.trim();
+  if (!state.accessCode) return;
+  const res = await fetch("/api/status", { headers: userHeaders() }).catch(() => null);
+  if (!res || !res.ok) {
+    els.accessHelp.textContent = !res ? "Сервер недоступен, попробуйте ещё раз."
+      : res.status === 429 ? "Слишком много неверных попыток. Подождите минуту." : "Код не подошёл, проверьте его.";
+    return;
+  }
+  store.set("accessCode", state.accessCode);
+  els.access.close();
+  await loadStatus();
+  loadAgenda();
+  checkReminders();
+});
 
 /* ---------------------------------------------------------------- диалог */
 
@@ -274,8 +315,10 @@ function dayTitle(dateStr, todayStr) {
 }
 
 async function loadAgenda(changed = []) {
-  let items;
-  try { items = await api("/api/items/upcoming?days=7"); } catch { return; }
+  let items, undated;
+  try {
+    [items, undated] = await Promise.all([api("/api/items/upcoming?days=7"), api("/api/items/undated")]);
+  } catch { return; }
   const today = (state.status && state.status.now ? state.status.now : new Date().toISOString()).slice(0, 10);
   els.agendaList.textContent = "";
   if (!items.length) {
@@ -283,7 +326,6 @@ async function loadAgenda(changed = []) {
     p.className = "agenda-empty";
     p.textContent = "На неделю ничего не запланировано. Скажите, например: «Добавь встречу с командой завтра в 15:00».";
     els.agendaList.appendChild(p);
-    return;
   }
   const groups = new Map();
   for (const it of items) {
@@ -305,6 +347,18 @@ async function loadAgenda(changed = []) {
       ul.appendChild(agendaItem(it, flash));
     }
     sec.appendChild(ul);
+    els.agendaList.appendChild(sec);
+  }
+  if (undated.length) {
+    // задачи без срока («запиши купить корм коту») — отдельным блоком, иначе их не видно в плане
+    const sec = document.createElement("section");
+    sec.className = "day undated";
+    const h = document.createElement("h3");
+    h.textContent = "Без срока";
+    const ul = document.createElement("ul");
+    ul.className = "items";
+    for (const it of undated) ul.appendChild(agendaItem(it, changed.includes(it.id)));
+    sec.append(h, ul);
     els.agendaList.appendChild(sec);
   }
 }
@@ -334,7 +388,7 @@ function agendaItem(it, flash) {
   });
   const time = document.createElement("span");
   time.className = "time";
-  time.textContent = it.has_time ? it.due_at.slice(11, 16) : "день";
+  time.textContent = !it.due_at ? "—" : it.has_time ? it.due_at.slice(11, 16) : "день";
   if (it.has_time && it.end_at) {
     const end = document.createElement("span");
     end.className = "time-end";
@@ -442,10 +496,12 @@ async function copyCalendarLink() {
   const path = (state.status && state.status.calendar_path) || "/calendar/demo.ics";
   const url = location.origin + path;
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-  try { await navigator.clipboard.writeText(url); } catch { /* нет доступа к буферу — покажем ссылку */ }
+  let copied = true;
+  try { await navigator.clipboard.writeText(url); } catch { copied = false; /* нет доступа к буферу — покажем ссылку */ }
   showToast(local
     ? `Ссылка: ${url}. Подписка заработает, когда сайт будет доступен из интернета. Пока можно скачать .ics и импортировать.`
-    : `Ссылка скопирована: ${url}. В Google Календаре: «Другие календари» → «Добавить по URL».`);
+    : `${copied ? "Ссылка скопирована" : `Ссылка: ${url}`}. Google Календарь: «Другие календари» → «+» → «Добавить по URL». `
+      + `Яндекс Календарь: «Новый календарь» → «Подписаться на календарь». Ссылка личная, не публикуйте её.`);
 }
 
 /* ---------------------------------------------------------------- профили */
@@ -487,9 +543,10 @@ async function loadStatus() {
     const nlu = state.status.llm_model ? `разбор запросов: ${state.status.llm_model} + правила` : "разбор запросов: правила";
     const voice = SR ? "голос: браузер" : state.status.stt_server ? "голос: сервер" : "голос: недоступен в этом браузере";
     els.status.textContent = `профиль: ${state.status.user} · ${nlu}, ${voice}`;
-    els.icsDownload.href = `${state.status.calendar_path}?download=true`;
-  } catch {
-    els.status.textContent = "Сервер недоступен";
+    const cal = state.status.calendar_path;
+    els.icsDownload.href = `${cal}${cal.includes("?") ? "&" : "?"}download=true`;
+  } catch (err) {
+    els.status.textContent = err instanceof AccessError ? "Нужен код доступа" : "Сервер недоступен";
   }
   if (!canListen()) {
     els.mic.disabled = true;
