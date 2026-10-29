@@ -1,7 +1,9 @@
 """HTTP API (FastAPI) и раздача веб-интерфейса."""
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import logging
 import os
 import threading
@@ -10,10 +12,21 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from urllib.parse import quote, unquote
 
-from fastapi import FastAPI, File, Header, HTTPException, Path, Request, UploadFile
+from fastapi import (
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.access import calendar_token
 from app.config import BASE_DIR, get_settings
@@ -21,6 +34,7 @@ from app.container import USER_ID_RX, Container, build
 from app.dialog import phrases as ph
 from app.models import Item
 from app.services.ics import build_calendar
+from app.voice.vosk_stt import AudioFormatError, BusyError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 STATIC_DIR = BASE_DIR / "app" / "static"
@@ -32,6 +46,8 @@ container: Container | None = None
 async def lifespan(_: FastAPI):
     global container
     container = build(get_settings())
+    if getattr(container.stt, "streaming", False):  # модель Vosk грузится в фоне, сервер стартует сразу
+        threading.Thread(target=container.stt.preload, daemon=True).start()
     url = os.getenv("OPEN_BROWSER_URL")
     if url:  # start.bat: открыть страницу, только когда сервер точно поднялся
         threading.Timer(1.0, webbrowser.open, args=[url]).start()
@@ -235,16 +251,74 @@ def calendar_path(user: str) -> str:
 @app.post("/api/stt")
 async def stt(file: UploadFile = File(...)):
     if c().stt is None:
-        raise HTTPException(501, "Серверное распознавание не настроено (STT_BASE_URL, STT_MODEL)")
+        raise HTTPException(501, "Серверное распознавание не настроено (модель Vosk или STT_BASE_URL, STT_MODEL)")
     data = await file.read()
     if len(data) > 15 * 1024 * 1024:
         raise HTTPException(413, "Слишком длинная запись")
     try:
-        text = c().stt.transcribe(file.filename or "audio.webm", data, file.content_type)
+        # распознавание долгое и нагружает процессор — в отдельном потоке, чтобы не держать остальные запросы
+        text = await run_in_threadpool(c().stt.transcribe, file.filename or "audio.wav", data, file.content_type)
+    except AudioFormatError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         logging.getLogger(__name__).warning("STT error: %s", exc)
         raise HTTPException(502, "Сервис распознавания речи недоступен") from exc
     return {"text": text}
+
+
+@app.websocket("/api/stt/stream")
+async def stt_stream(ws: WebSocket):
+    """Потоковое распознавание: {"rate", "code"} → куски PCM 16 бит → "end".
+    Ответы: {"partial": текст} по ходу речи, {"text": итог} в конце, {"error", "status"} при отказе.
+    Код доступа приходит первым сообщением: заголовки WebSocket браузер задать не даёт, а в адресе он попал бы в логи."""
+    await ws.accept()
+
+    async def refuse(status: int, detail: str) -> None:
+        try:
+            await ws.send_json({"error": detail, "status": status})
+            await ws.close()
+        except (WebSocketDisconnect, RuntimeError):  # клиент уже ушёл
+            pass
+
+    try:
+        hello = json.loads(await asyncio.wait_for(ws.receive_text(), timeout=10))
+        rate = int(hello.get("rate", 16000))
+    except (asyncio.TimeoutError, ValueError, TypeError, AttributeError, KeyError, WebSocketDisconnect):
+        return await refuse(400, "Ожидалось {\"rate\": 16000}")
+    client = ws.client.host if ws.client else "?"
+    access = c().access.check(client, str(hello.get("code") or "").strip())
+    if access != 200:
+        return await refuse(access, "Нужен код доступа" if access == 401 else "Слишком много неверных попыток")
+    if not getattr(c().stt, "streaming", False):
+        return await refuse(501, "Потоковое распознавание не настроено")
+    if not 8000 <= rate <= 48000:
+        return await refuse(400, "Частота звука должна быть от 8 до 48 кГц")
+    try:
+        stream = await run_in_threadpool(c().stt.open_stream, rate)
+    except BusyError as exc:
+        return await refuse(503, str(exc))
+    except Exception as exc:
+        logging.getLogger(__name__).warning("STT stream error: %s", exc)
+        return await refuse(502, "Распознавание речи недоступно")
+    try:
+        last = ""
+        while True:
+            message = await asyncio.wait_for(ws.receive(), timeout=15)
+            if message["type"] == "websocket.disconnect":
+                return
+            if message.get("bytes"):
+                text = await run_in_threadpool(stream.feed, message["bytes"])
+                if text != last:
+                    last = text
+                    await ws.send_json({"partial": text})
+            elif message.get("text") is not None:  # "end": человек закончил говорить
+                await ws.send_json({"text": await run_in_threadpool(stream.finish)})
+                await ws.close()
+                return
+    except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError):
+        return
+    finally:
+        stream.close()
 
 
 @app.get("/api/status")
@@ -254,7 +328,8 @@ def status(x_user_id: str | None = Header(default=None)):
     return {
         "nlu": c().nlu.mode,
         "llm_model": s.active_llm_model if c().nlu.llm is not None else None,
-        "stt_server": s.stt_enabled,
+        "stt_server": c().stt is not None,
+        "stt_stream": getattr(c().stt, "streaming", False),
         "semantic_embeddings": s.embeddings_enabled,
         "now": c().service.now().isoformat(),
         "timezone": s.timezone,

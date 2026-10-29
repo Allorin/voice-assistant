@@ -283,6 +283,7 @@ h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
 .settings-head h2 { margin: 0; font-size: 19px; }
 .settings-head button { flex: none; }
 .setting-field { display: grid; gap: 8px; margin: 16px 0; font-size: 15px; }
+.setting-field[hidden] { display: none; }
 .setting-field span { display: flex; justify-content: space-between; gap: 12px; }
 .setting-field output { color: var(--muted); font-variant-numeric: tabular-nums; }
 .setting-field select { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }

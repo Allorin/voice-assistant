@@ -96,6 +96,13 @@
       </label>
       <p class="setting-help" id="profileHelp">У каждого профиля свои задачи и встречи. Введите имя, чтобы переключиться или создать профиль.</p>
     </form>
+    <label class="setting-field" id="sttField" for="sttMode" hidden>Распознавание речи
+      <select id="sttMode">
+        <option value="auto">Автоматически · браузер, при сбое — сервер</option>
+        <option value="browser">Браузер</option>
+        <option value="server">Сервер (офлайн-модель Vosk)</option>
+      </select>
+    </label>
     <label class="setting-field" for="voiceSelect">Голос
       <select id="voiceSelect"><option value="">Автоматически · русский голос</option></select>
     </label>
@@ -145,6 +152,7 @@
   </dialog>
   <div class="toast" id="toast" role="alert" hidden></div>
   <script src="/static/audio.js"></script>
+  <script src="/static/recorder.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

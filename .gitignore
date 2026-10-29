@@ -19,3 +19,5 @@ sync_from_github.bat
 eval/results/warnings.txt
 tests_log.txt
 amvera_log.txt
+models/
+voice_log.txt

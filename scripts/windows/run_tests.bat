@@ -12,7 +12,7 @@ echo Запускаю тесты...
 "%PY%" -m pytest -q -p no:cacheprovider > tests_log.txt 2>&1
 set RC=%ERRORLEVEL%
 type tests_log.txt
-where node >nul 2>&1 && node --test tests\js\audio.test.cjs >> tests_log.txt 2>&1
+where node >nul 2>&1 && node --test tests\js\audio.test.cjs tests\js\recorder.test.cjs >> tests_log.txt 2>&1
 if not "%RC%"=="0" goto fail
 echo.
 echo Все тесты пройдены. Журнал: tests_log.txt

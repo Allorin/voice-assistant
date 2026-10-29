@@ -21,6 +21,7 @@ from app.storage.db import init_db
 from app.storage.importer import import_csv
 from app.storage.repository import ItemRepository
 from app.voice.stt import SpeechToText
+from app.voice.vosk_stt import VoskSpeechToText, vosk_available
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class Container:
     service: ItemService
     nlu: HybridNLU
     dialog: DialogManager
-    stt: SpeechToText | None
+    stt: SpeechToText | VoskSpeechToText | None
     access: AccessGuard = field(default_factory=AccessGuard)
     _known_users: set[str] = field(default_factory=set)
     _users_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -58,6 +59,16 @@ class Container:
         if csv_path and Path(csv_path).exists():
             n = import_csv(self.repo, csv_path, user_id, now)
             log.info("Профиль %s: загружено %s демо-записей", user_id, n)
+
+
+def build_stt(settings: Settings) -> SpeechToText | VoskSpeechToText | None:
+    """Серверное распознавание: внешний сервис, если настроен, иначе офлайн-модель Vosk, если скачана."""
+    if settings.stt_enabled:
+        return SpeechToText(settings.stt_base_url, settings.stt_api_key, settings.stt_model)
+    if vosk_available(settings.stt_vosk_model):
+        log.info("Серверное распознавание речи: Vosk (%s)", settings.stt_vosk_model)
+        return VoskSpeechToText(settings.stt_vosk_model)
+    return None
 
 
 def build(settings: Settings, clock: Clock | None = None) -> Container:
@@ -84,7 +95,6 @@ def build(settings: Settings, clock: Clock | None = None) -> Container:
         llm = None
     nlu = HybridNLU(RuleNLU(), llm)
 
-    stt = SpeechToText(settings.stt_base_url, settings.stt_api_key, settings.stt_model) \
-        if settings.stt_enabled else None
+    stt = build_stt(settings)
     dialog = DialogManager(nlu, service, SessionStore(), settings.default_user)
     return Container(settings, repo, service, nlu, dialog, stt, AccessGuard(settings.access_code))

@@ -1,5 +1,6 @@
 /* Голосовой ежедневник — клиент.
-   Голос → текст: Web Speech API браузера (Chrome, Edge, Safari) или, если его нет, запись + /api/stt.
+   Голос → текст: Web Speech API браузера (Chrome, Edge, Safari) или, если его нет или он не работает,
+   запись в WAV (recorder.js) + офлайн-распознавание Vosk на сервере (/api/stt).
    Текст → ответ: /api/chat. Ответ → голос: speechSynthesis браузера. */
 "use strict";
 
@@ -17,6 +18,7 @@ const els = {
   rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
   detailsEnabled: $("detailsEnabled"), voicePreview: $("voicePreview"), voiceStatus: $("voiceStatus"),
   profileForm: $("profileForm"), profileName: $("profileName"), profileHelp: $("profileHelp"), icsDownload: $("icsDownload"),
+  sttField: $("sttField"), sttMode: $("sttMode"),
   access: $("accessDialog"), accessForm: $("accessForm"), accessCode: $("accessCode"), accessHelp: $("accessHelp"),
 };
 
@@ -216,11 +218,28 @@ function setSpeak(on) {
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
-let mediaRecorder = null;
+let recorder = null;
 let finalSent = false;
+let switchToServer = false;
+// Режим распознавания: auto — своё распознавание браузера (Chrome, Edge, Safari), а сервер (Vosk) — только
+// если его нет или он отказал; browser; server. ?voice=server — для проверки
+const STT_MODES = ["auto", "browser", "server"];
+state.sttMode = (() => {
+  const fromUrl = new URLSearchParams(location.search).get("voice");
+  if (STT_MODES.includes(fromUrl)) store.set("sttMode", fromUrl);
+  const saved = store.get("sttMode", "auto");
+  return STT_MODES.includes(saved) ? saved : "auto";
+})();
+
+const serverStt = () => !!(state.status && state.status.stt_server && window.VoiceRecorder && VoiceRecorder.supported());
+// отказ браузера запоминаем только до перезагрузки страницы: в Chrome случайный сбой сети не должен
+// навсегда переключить на менее точное серверное распознавание
+state.browserSttFailed = false;
+const useServerStt = () => serverStt()
+  && (!SR || state.sttMode === "server" || (state.sttMode === "auto" && state.browserSttFailed));
 
 function canListen() {
-  return !!SR || !!(state.status && state.status.stt_server && navigator.mediaDevices);
+  return !!SR || serverStt();
 }
 
 function setListening(on) {
@@ -236,14 +255,21 @@ function hint(text) { els.hint.textContent = text || ""; }
 function startListening() {
   if (state.listening) return;
   audio.stop();
+  if (useServerStt()) return startRecording();
   if (SR) return startBrowserRecognition();
-  if (state.status && state.status.stt_server) return startRecording();
   hint("Голосовой ввод работает в Chrome, Edge и Safari. Можно писать текстом.");
 }
 
 function stopListening() {
+  if (recorder) return recorder.stop("manual");
   if (recognition) recognition.stop();
-  if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+}
+
+function setSttMode(mode) {
+  state.sttMode = mode;
+  store.set("sttMode", mode);
+  if (els.sttMode) els.sttMode.value = mode;
+  showStatus();
 }
 
 function startBrowserRecognition() {
@@ -253,6 +279,7 @@ function startBrowserRecognition() {
   recognition.continuous = false;
   recognition.maxAlternatives = 1;
   finalSent = false;
+  switchToServer = false;
   recognition.onresult = (e) => {
     let interim = "", final = "";
     for (const r of e.results) (r.isFinal ? (final += r[0].transcript) : (interim += r[0].transcript));
@@ -260,6 +287,12 @@ function startBrowserRecognition() {
     if (final && !finalSent) { finalSent = true; send(final, true); }
   };
   recognition.onerror = (e) => {
+    // Opera, Яндекс Браузер, Brave и др. объявляют распознавание, но сервис Google им недоступен
+    if (["network", "service-not-allowed", "language-not-supported"].includes(e.error) && serverStt()
+        && state.sttMode === "auto") {
+      switchToServer = true;
+      return;
+    }
     const messages = {
       "not-allowed": "Нет доступа к микрофону. Разрешите его в настройках браузера.",
       "no-speech": "Ничего не слышно. Нажмите на микрофон и говорите.",
@@ -270,6 +303,12 @@ function startBrowserRecognition() {
   };
   recognition.onend = () => {
     setListening(false);
+    if (switchToServer) {
+      state.browserSttFailed = true;
+      showStatus();
+      showToast("Распознавание речи браузера недоступно — речь распознаёт сервер.");
+      return startRecording();
+    }
     if (!finalSent && els.input.value.trim()) { finalSent = true; send(els.input.value, true); }
     else if (els.hint.textContent.startsWith("Слушаю")) hint("");
   };
@@ -277,31 +316,100 @@ function startBrowserRecognition() {
   setListening(true);
 }
 
+// Потоковое распознавание: звук уходит на сервер по ходу речи, промежуточный текст сразу виден в поле ввода
+function openSttStream(rate, onPartial) {
+  let ws;
+  try { ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/stt/stream`); }
+  catch { return null; }
+  let pending = [], pendingSize = 0, ended = false, failed = false, finalText = null, settle = null;
+  const done = (text) => { if (settle) { settle(text); settle = null; } };
+  const fail = () => { if (finalText === null) { failed = true; done(null); } };
+  const flush = () => {
+    if (!pendingSize || ws.readyState !== WebSocket.OPEN) return;
+    const pcm = new Int16Array(pendingSize);
+    let offset = 0;
+    for (const p of pending) { pcm.set(p, offset); offset += p.length; }
+    pending = []; pendingSize = 0;
+    ws.send(pcm.buffer);
+  };
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ rate, code: state.accessCode || "" }));
+    flush();
+    if (ended) ws.send("end");
+  };
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (typeof msg.partial === "string") onPartial(msg.partial);
+    else if (typeof msg.text === "string") { finalText = msg.text; done(msg.text); }
+    else if (msg.error) fail();
+  };
+  ws.onerror = fail;
+  ws.onclose = fail;
+  return {
+    push(pcm) {  // копим ~0,25 с, чтобы не слать сотни мелких сообщений
+      if (failed || ended) return;
+      pending.push(pcm); pendingSize += pcm.length;
+      if (pendingSize >= rate / 4) flush();
+    },
+    finish(timeoutMs = 8000) {
+      return new Promise((resolve) => {
+        if (finalText !== null || failed) return resolve(failed ? null : finalText);
+        settle = resolve;
+        ended = true;
+        if (ws.readyState === WebSocket.OPEN) { flush(); ws.send("end"); }
+        setTimeout(() => done(null), timeoutMs);
+      });
+    },
+    close() { failed = true; try { ws.close(); } catch { /* уже закрыт */ } },
+  };
+}
+
 async function startRecording() {
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-  catch { hint("Нет доступа к микрофону. Разрешите его в настройках браузера."); return; }
-  const chunks = [];
-  mediaRecorder = new MediaRecorder(stream);
-  mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  mediaRecorder.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop());
-    setListening(false);
-    hint("Распознаю…");
+  let stream = null;
+  recorder = new VoiceRecorder({
+    onChunk: (pcm) => stream && stream.push(pcm),
+    onStop: (wav) => recognizeOnServer(wav, stream),
+  });
+  try {
+    await recorder.start();
+  } catch (err) {
+    recorder = null;
+    hint(err && err.name === "NotAllowedError" ? "Нет доступа к микрофону. Разрешите его в настройках браузера."
+      : "Микрофон не найден или занят другой программой.");
+    return;
+  }
+  if (state.status.stt_stream && window.WebSocket) {
+    stream = openSttStream(recorder.outputRate, (text) => { if (state.listening) els.input.value = text; });
+  }
+  els.input.value = "";
+  setListening(true);
+  hint("Слушаю… Говорите — после паузы запись остановится сама.");
+}
+
+async function recognizeOnServer(wav, stream) {
+  recorder = null;
+  setListening(false);
+  if (!wav) {
+    if (stream) stream.close();
+    return hint("Ничего не слышно. Нажмите на микрофон и говорите.");
+  }
+  hint("Распознаю…");
+  let text = null;
+  if (stream) { text = await stream.finish(); stream.close(); }
+  if (text === null) {  // потоковое распознавание недоступно — отправляем запись целиком
     const form = new FormData();
-    form.append("file", new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" }), "speech.webm");
+    form.append("file", wav, "speech.wav");
     try {
       const res = await fetch("/api/stt", { method: "POST", body: form, headers: userHeaders() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "ошибка распознавания");
-      hint("");
-      if (data.text) send(data.text, true); else hint("Ничего не распознано. Попробуйте ещё раз.");
-    } catch (err) { hint(`Не получилось распознать речь: ${err.message}.`); }
-  };
-  mediaRecorder.start();
-  setListening(true);
-  hint("Слушаю… Нажмите ещё раз, когда закончите.");
-  setTimeout(() => mediaRecorder && mediaRecorder.state === "recording" && mediaRecorder.stop(), 15000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `ошибка ${res.status}`);
+      text = data.text || "";
+    } catch (err) { return hint(`Не получилось распознать речь: ${err.message}.`); }
+  }
+  hint("");
+  if (text) { els.input.value = text; send(text, true); }
+  else { els.input.value = ""; hint("Ничего не распознано. Попробуйте ещё раз, чуть ближе к микрофону."); }
 }
 
 /* ---------------------------------------------------------------- план на неделю */
@@ -551,6 +659,15 @@ async function switchProfile(name) {
 
 /* ---------------------------------------------------------------- старт */
 
+function showStatus() {
+  if (!state.status) return;
+  const nlu = state.status.llm_model ? `разбор запросов: ${state.status.llm_model} + правила` : "разбор запросов: правила";
+  const voice = useServerStt() ? "голос: сервер" : SR ? "голос: браузер" : "голос: недоступен в этом браузере";
+  els.status.textContent = `профиль: ${state.status.user} · ${nlu}, ${voice}`;
+  // выбор распознавания показываем, только если доступны оба варианта
+  if (els.sttField) els.sttField.hidden = !(SR && serverStt());
+}
+
 async function loadStatus() {
   try {
     state.status = await api("/api/status");
@@ -559,18 +676,14 @@ async function loadStatus() {
       setProfile(`гость-${Math.random().toString(36).slice(2, 6)}`);
       state.status = await api("/api/status");
     }
-    const nlu = state.status.llm_model ? `разбор запросов: ${state.status.llm_model} + правила` : "разбор запросов: правила";
-    const voice = SR ? "голос: браузер" : state.status.stt_server ? "голос: сервер" : "голос: недоступен в этом браузере";
-    els.status.textContent = `профиль: ${state.status.user} · ${nlu}, ${voice}`;
+    showStatus();
     const cal = state.status.calendar_path;
     els.icsDownload.href = `${cal}${cal.includes("?") ? "&" : "?"}download=true`;
   } catch (err) {
     els.status.textContent = err instanceof AccessError ? "Нужен код доступа" : "Сервер недоступен";
   }
-  if (!canListen()) {
-    els.mic.disabled = true;
-    els.mic.title = "Голосовой ввод работает в Chrome, Edge и Safari";
-  }
+  els.mic.disabled = !canListen();
+  if (!canListen()) els.mic.title = "Голосовой ввод работает в Chrome, Edge и Safari";
 }
 
 els.composer.addEventListener("submit", (e) => { e.preventDefault(); send(els.input.value); });
@@ -583,6 +696,8 @@ els.settingsOpen.addEventListener("click", () => {
 });
 els.profileForm.addEventListener("submit", (e) => { e.preventDefault(); switchProfile(els.profileName.value); });
 els.settingsClose.addEventListener("click", () => els.settings.close());
+els.sttMode.value = state.sttMode;
+els.sttMode.addEventListener("change", () => setSttMode(els.sttMode.value));
 for (const control of [els.voiceSelect, els.voiceRate, els.voiceVolume, els.bellEnabled, els.detailsEnabled]) {
   control.addEventListener(control.type === "range" ? "input" : "change", saveAudioSettings);
 }

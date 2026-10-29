@@ -1,0 +1,4 @@
+# Офлайн-распознавание речи на сервере (для Firefox и других браузеров без своего распознавания).
+# Модель ставится отдельно: python scripts/download_vosk_model.py (или scripts\windows\install_voice.bat)
+vosk>=0.3.45
+websockets>=12  # WebSocket в uvicorn: текст появляется в поле ввода по ходу речи
