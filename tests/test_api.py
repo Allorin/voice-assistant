@@ -41,6 +41,15 @@ def test_stt_not_configured():
     assert r.status_code == 501
 
 
+def test_page_and_scripts_are_revalidated():
+    c = client()
+    for path in ("/", "/static/app.js", "/static/recorder.js"):
+        r = c.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+        assert c.get(path, headers={"If-None-Match": r.headers["etag"]}).status_code in (200, 304)
+    assert "cache-control" not in c.get("/api/status").headers
+
+
 def test_icons_are_served():
     c = client()
     assert c.get("/favicon.ico").headers["content-type"] == "image/x-icon"

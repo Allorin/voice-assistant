@@ -76,6 +76,17 @@ async def access_code(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def fresh_static(request: Request, call_next):
+    """Страница и скрипты — без долгого кэша: после обновления стенда браузер сверяет файлы (ETag) и берёт новые,
+    иначе старый app.js из кэша работает с новым сервером."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
 def c() -> Container:
     assert container is not None
     return container
@@ -259,7 +270,10 @@ async def stt(file: UploadFile = File(...)):
         # распознавание долгое и нагружает процессор — в отдельном потоке, чтобы не держать остальные запросы
         text = await run_in_threadpool(c().stt.transcribe, file.filename or "audio.wav", data, file.content_type)
     except AudioFormatError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        # webm присылает только прежняя версия страницы, оставшаяся в кэше браузера
+        old_page = (file.filename or "").endswith(".webm") or (file.content_type or "").startswith("audio/webm")
+        detail = "страница устарела, обновите её с очисткой кэша (Ctrl+F5)" if old_page else str(exc)
+        raise HTTPException(400, detail) from exc
     except Exception as exc:
         logging.getLogger(__name__).warning("STT error: %s", exc)
         raise HTTPException(502, "Сервис распознавания речи недоступен") from exc

@@ -133,8 +133,11 @@ def test_api_with_vosk(fake_vosk, model_dir):
     assert c.get("/api/status").json()["stt_server"] is True
     r = c.post("/api/stt", files={"file": ("speech.wav", wav_bytes(), "audio/wav")})
     assert r.status_code == 200 and r.json() == {"text": "напомни завтра купить хлеб"}
-    r = c.post("/api/stt", files={"file": ("speech.webm", b"webm", "audio/webm")})
+    r = c.post("/api/stt", files={"file": ("speech.wav", b"not a wav", "audio/wav")})
     assert r.status_code == 400 and "WAV" in r.json()["detail"]
+    # webm шлёт только старая страница из кэша браузера — подсказываем обновить её
+    r = c.post("/api/stt", files={"file": ("speech.webm", b"webm", "audio/webm")})
+    assert r.status_code == 400 and "Ctrl+F5" in r.json()["detail"]
 
 
 def test_status_without_server_stt():
