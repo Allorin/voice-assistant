@@ -21,6 +21,7 @@ from app.storage.db import init_db
 from app.storage.importer import import_csv
 from app.storage.repository import ItemRepository
 from app.voice.stt import SpeechToText
+from app.voice.tts import PiperTextToSpeech, piper_available
 from app.voice.vosk_stt import VoskSpeechToText, vosk_available
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class Container:
     dialog: DialogManager
     stt: SpeechToText | VoskSpeechToText | None
     access: AccessGuard = field(default_factory=AccessGuard)
+    tts: PiperTextToSpeech | None = None
     _known_users: set[str] = field(default_factory=set)
     _users_lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -97,4 +99,7 @@ def build(settings: Settings, clock: Clock | None = None) -> Container:
 
     stt = build_stt(settings)
     dialog = DialogManager(nlu, service, SessionStore(), settings.default_user)
-    return Container(settings, repo, service, nlu, dialog, stt, AccessGuard(settings.access_code))
+    tts = PiperTextToSpeech(settings.tts_piper_voice) if piper_available(settings.tts_piper_voice) else None
+    if tts:
+        log.info("Озвучка на сервере: Piper (%s)", settings.tts_piper_voice)
+    return Container(settings, repo, service, nlu, dialog, stt, AccessGuard(settings.access_code), tts=tts)

@@ -46,8 +46,11 @@ container: Container | None = None
 async def lifespan(_: FastAPI):
     global container
     container = build(get_settings())
-    if getattr(container.stt, "streaming", False):  # модель Vosk грузится в фоне, сервер стартует сразу
+    # модели Vosk и голос Piper грузятся в фоне: сервер стартует сразу
+    if getattr(container.stt, "streaming", False):
         threading.Thread(target=container.stt.preload, daemon=True).start()
+    if container.tts is not None:
+        threading.Thread(target=container.tts.preload, daemon=True).start()
     url = os.getenv("OPEN_BROWSER_URL")
     if url:  # start.bat: открыть страницу, только когда сервер точно поднялся
         threading.Timer(1.0, webbrowser.open, args=[url]).start()
@@ -280,6 +283,24 @@ async def stt(file: UploadFile = File(...)):
     return {"text": text}
 
 
+class TTSRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    rate: float = 1.0
+
+
+@app.post("/api/tts")
+async def tts(req: TTSRequest):
+    """Озвучка на сервере для браузеров без русского голоса: WAV с текстом."""
+    if c().tts is None:
+        raise HTTPException(501, "Озвучка на сервере не настроена (голос Piper)")
+    try:
+        data = await run_in_threadpool(c().tts.synthesize, req.text, req.rate)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("TTS error: %s", exc)
+        raise HTTPException(502, "Озвучка на сервере недоступна") from exc
+    return Response(data, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
 @app.websocket("/api/stt/stream")
 async def stt_stream(ws: WebSocket):
     """Потоковое распознавание: {"rate", "code"} → куски PCM 16 бит → "end".
@@ -344,6 +365,7 @@ def status(x_user_id: str | None = Header(default=None)):
         "llm_model": s.active_llm_model if c().nlu.llm is not None else None,
         "stt_server": c().stt is not None,
         "stt_stream": getattr(c().stt, "streaming", False),
+        "tts_server": c().tts is not None,
         "semantic_embeddings": s.embeddings_enabled,
         "now": c().service.now().isoformat(),
         "timezone": s.timezone,

@@ -1,12 +1,20 @@
-/* Озвучка и короткий синтезированный колокольчик. Внешние сервисы и аудиофайлы не нужны. */
+/* Озвучка и короткий синтезированный колокольчик.
+   Текст озвучивает браузер (speechSynthesis). Если русского голоса в браузере нет (Chrome и Firefox на Linux
+   и др.) или в настройках выбран голос сервера, звук берётся с сервера (remote.synthesize → WAV). */
 "use strict";
 
+const RUSSIAN = /^ru(?:[-_]|$)/i;
+
 class PlannerAudio {
-  constructor({ getSettings, isEnabled, onError = () => {}, onVoicesChanged = () => {} }) {
+  static SERVER_VOICE = "server";
+
+  constructor({ getSettings, isEnabled, onError = () => {}, onVoicesChanged = () => {}, remote = null }) {
     this.getSettings = getSettings;
     this.isEnabled = isEnabled;
     this.onError = onError;
+    this.remote = remote;  // { available(): bool, synthesize(text, rate): Promise<ArrayBuffer> }
     this.synth = window.speechSynthesis;
+    this.voicesLoading = null;
     this.context = null;
     this.jobs = [];
     this.running = false;
@@ -30,6 +38,27 @@ class PlannerAudio {
     const selected = voices.find((v) => v.voiceURI === this.getSettings().voice);
     const russian = voices.filter((v) => /^ru(?:-|$)/i.test(v.lang));
     return selected || russian.find((v) => /google|милена|milena|yandex|natural/i.test(v.name)) || russian[0] || null;
+  }
+
+  hasRussianVoice() {
+    return (this.synth?.getVoices() || []).some((v) => RUSSIAN.test(v.lang));
+  }
+
+  // Chrome отдаёт список голосов не сразу; на Linux без голосов он так и остаётся пустым
+  voicesReady() {
+    if (!this.synth || this.synth.getVoices().length) return Promise.resolve();
+    this.voicesLoading ||= new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1000);
+      this.synth.addEventListener?.("voiceschanged", () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    return this.voicesLoading;
+  }
+
+  async useServer() {
+    if (!this.remote || !this.remote.available()) return false;
+    if (this.getSettings().voice === PlannerAudio.SERVER_VOICE || !this.synth) return true;
+    await this.voicesReady();
+    return !this.hasRussianVoice();
   }
 
   async unlock() {
@@ -75,10 +104,60 @@ class PlannerAudio {
 
   speak(text) {
     if (!text) return Promise.resolve();
+    if (this.remote?.available()) {
+      return this.useServer().then((server) => (server ? this.speakServer(text) : this.speakLocal(text)));
+    }
+    return this.speakLocal(text);
+  }
+
+  speakLocal(text) {
     if (!this.synth) {
       this.onError("Озвучка недоступна в этом браузере. Напоминания будут показаны на экране.");
       return Promise.resolve();
     }
+    if (this.synth.getVoices().length && !this.hasRussianVoice()) {
+      // иначе английский голос прочитал бы русский текст неразборчиво
+      this.onError("В браузере нет русского голоса для озвучки. Ответы показаны текстом.");
+      return Promise.resolve();
+    }
+    return this.speakBrowser(text);
+  }
+
+  async speakServer(text) {
+    const generation = this.generation;
+    const settings = this.getSettings();
+    let data;
+    try {
+      data = await this.remote.synthesize(text, settings.rate);
+    } catch {
+      this.onError("Сервер не смог озвучить ответ. Он показан текстом.");
+      return;
+    }
+    if (!data || !data.byteLength || generation !== this.generation || !this.isEnabled()) return;
+    const url = URL.createObjectURL(new Blob([data], { type: "audio/wav" }));
+    const player = new window.Audio(url);
+    player.volume = settings.volume;
+    await new Promise((resolve) => {
+      let timer;
+      const done = () => {
+        clearTimeout(timer);
+        player.pause();
+        URL.revokeObjectURL(url);
+        if (this.finishSpeech === done) this.finishSpeech = null;
+        resolve();
+      };
+      this.finishSpeech = done;
+      player.onended = done;
+      player.onerror = done;
+      timer = setTimeout(done, 60000);
+      Promise.resolve(player.play()).catch(() => {
+        this.onError("Браузер не дал включить звук. Нажмите «Прослушать пример» в настройках озвучки.");
+        done();
+      });
+    });
+  }
+
+  speakBrowser(text) {
     return new Promise((resolve) => {
       const settings = this.getSettings();
       const utterance = new SpeechSynthesisUtterance(text.replace(/[«»]/g, ""));

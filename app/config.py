@@ -75,6 +75,8 @@ class Settings:
 
     # Офлайн-распознавание речи Vosk: папка с моделью (scripts/download_vosk_model.py). Пусто — выключено
     stt_vosk_model: str = ""
+    # Озвучка на сервере Piper (для браузеров без русского голоса): файл голоса .onnx. Пусто — выключена
+    tts_piper_voice: str = ""
 
     # Публичный стенд: у каждого посетителя свой гостевой профиль с копией демо-записей
     public_demo: bool = False
@@ -142,6 +144,7 @@ def get_settings() -> Settings:
         stt_api_key=_env("STT_API_KEY", "none"),
         stt_model=_env("STT_MODEL"),
         stt_vosk_model=_env("STT_VOSK_MODEL", str(BASE_DIR / "models" / "vosk-model-small-ru-0.22")),
+        tts_piper_voice=_env("TTS_PIPER_VOICE", str(BASE_DIR / "models" / "piper" / "ru_RU-irina-medium.onnx")),
         embeddings_base_url=_env("EMBEDDINGS_BASE_URL"),
         embeddings_api_key=_env("EMBEDDINGS_API_KEY", "none"),
         embeddings_model=_env("EMBEDDINGS_MODEL"),

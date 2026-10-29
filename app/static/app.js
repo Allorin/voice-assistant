@@ -167,22 +167,41 @@ async function send(text, viaVoice = false) {
 /* ---------------------------------------------------------------- озвучка */
 
 const audio = new PlannerAudio({ getSettings: () => state.audioSettings, isEnabled: () => state.speak,
-  onError: (text) => { hint(text); els.voiceStatus.textContent = text; }, onVoicesChanged: updateVoices });
+  onError: (text) => { hint(text); els.voiceStatus.textContent = text; }, onVoicesChanged: updateVoices,
+  // озвучка на сервере (Piper), если в браузере нет русского голоса или он выбран в настройках
+  remote: {
+    available: () => !!(state.status && state.status.tts_server),
+    synthesize: async (text, rate) => {
+      const res = await fetch("/api/tts", { method: "POST", body: JSON.stringify({ text, rate }),
+        headers: { "Content-Type": "application/json", ...userHeaders() } });
+      if (!res.ok) throw new Error(`Ошибка ${res.status}`);
+      return res.arrayBuffer();
+    },
+  },
+});
 const audioHelp = "Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.";
 
 function updateVoices() {
   const voices = audio.voices();
+  const server = !!(state.status && state.status.tts_server);
   els.voiceSelect.textContent = "";
   els.voiceSelect.add(new Option("Автоматически · русский голос", ""));
   for (const voice of voices) {
     els.voiceSelect.add(new Option(`${voice.name} · ${voice.lang}`, voice.voiceURI));
   }
-  if (voices.some((v) => v.voiceURI === state.audioSettings.voice)) els.voiceSelect.value = state.audioSettings.voice;
-  els.voiceSelect.disabled = !voices.length;
-  if (!audio.synth) els.voiceStatus.textContent = "В этом браузере нет синтеза речи. Будут доступны текстовые напоминания и колокольчик.";
+  if (server) els.voiceSelect.add(new Option("Ирина · голос сервера", PlannerAudio.SERVER_VOICE));
+  const options = [...els.voiceSelect.options].map((o) => o.value);
+  if (options.includes(state.audioSettings.voice)) els.voiceSelect.value = state.audioSettings.voice;
+  els.voiceSelect.disabled = options.length < 2;
+  const russian = audio.hasRussianVoice();
+  if (server && !russian && !audio.synth) els.voiceStatus.textContent = "В этом браузере нет синтеза речи — ответы озвучивает сервер.";
+  else if (server && !russian && audio.synth.getVoices().length) els.voiceStatus.textContent = "В браузере нет русского голоса — ответы озвучивает сервер.";
+  else if (!audio.synth) els.voiceStatus.textContent = "В этом браузере нет синтеза речи. Будут доступны текстовые напоминания и колокольчик.";
   else if (!voices.length) els.voiceStatus.textContent = audio.synth.getVoices().length
-    ? "Google русский, Microsoft Irina и Microsoft Pavel недоступны в этом браузере. Автоматический режим попробует озвучить текст по-русски."
-    : "Браузер ещё не предоставил голоса. Попробуйте прослушать пример; выбор обновится автоматически.";
+    ? (russian ? "Google русский, Microsoft Irina и Microsoft Pavel недоступны в этом браузере. Автоматический режим озвучит текст другим русским голосом."
+      : "В браузере нет русского голоса для озвучки. Ответы будут показаны текстом.")
+    : server ? "Браузер не предоставил голоса — ответы озвучивает сервер."
+      : "Браузер ещё не предоставил голоса. Попробуйте прослушать пример; выбор обновится автоматически.";
   else els.voiceStatus.textContent = audioHelp;
 }
 
@@ -677,6 +696,7 @@ async function loadStatus() {
       state.status = await api("/api/status");
     }
     showStatus();
+    updateVoices();
     const cal = state.status.calendar_path;
     els.icsDownload.href = `${cal}${cal.includes("?") ? "&" : "?"}download=true`;
   } catch (err) {
