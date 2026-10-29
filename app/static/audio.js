@@ -4,6 +4,21 @@
 "use strict";
 
 const RUSSIAN = /^ru(?:[-_]|$)/i;
+const PART_CHARS = 90;
+
+// Как split_speech на сервере: короткая первая фраза, чтобы звук начался сразу, остальное — частями по ~90 символов
+function splitSpeech(text) {
+  const clauses = text.replace(/\s+/g, " ").trim().split(/(?<=[.!?…:;])\s+/).filter(Boolean);
+  if (!clauses.length) return [];
+  const parts = [clauses[0]];
+  let rest = "";
+  for (const clause of clauses.slice(1)) {
+    rest = rest ? `${rest} ${clause}` : clause;
+    if (rest.length >= PART_CHARS) { parts.push(rest); rest = ""; }
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
 
 class PlannerAudio {
   static SERVER_VOICE = "server";
@@ -72,9 +87,10 @@ class PlannerAudio {
     } catch { return false; }
   }
 
-  play(text, { bell = false, onStart = () => {}, onEnd = () => {} } = {}) {
+  // parts — готовые части для голоса сервера (их сервер уже начал озвучивать); иначе текст делится здесь
+  play(text, { bell = false, onStart = () => {}, onEnd = () => {}, parts = null } = {}) {
     return new Promise((resolve) => {
-      this.jobs.push({ text, bell, onStart, onEnd, resolve });
+      this.jobs.push({ text, bell, onStart, onEnd, parts, resolve });
       this.drain();
     });
   }
@@ -90,7 +106,7 @@ class PlannerAudio {
           job.onStart();
           if (this.isEnabled()) {
             if (job.bell && this.getSettings().bell) await this.bell();
-            if (generation === this.generation && this.isEnabled()) await this.speak(job.text);
+            if (generation === this.generation && this.isEnabled()) await this.speak(job.text, job.parts);
           }
           if (generation === this.generation) job.onEnd();
           job.resolve(generation === this.generation);
@@ -102,10 +118,10 @@ class PlannerAudio {
     } finally { this.running = false; }
   }
 
-  speak(text) {
+  speak(text, parts = null) {
     if (!text) return Promise.resolve();
     if (this.remote?.available()) {
-      return this.useServer().then((server) => (server ? this.speakServer(text) : this.speakLocal(text)));
+      return this.useServer().then((server) => (server ? this.speakServer(text, parts) : this.speakLocal(text)));
     }
     return this.speakLocal(text);
   }
@@ -123,21 +139,32 @@ class PlannerAudio {
     return this.speakBrowser(text);
   }
 
-  async speakServer(text) {
+  // Части играют по очереди; следующая запрашивается, пока звучит текущая, поэтому пауз почти нет
+  async speakServer(text, parts = null) {
     const generation = this.generation;
     const settings = this.getSettings();
-    let data;
-    try {
-      data = await this.remote.synthesize(text, settings.rate);
-    } catch {
-      this.onError("Сервер не смог озвучить ответ. Он показан текстом.");
-      return;
+    const queue = parts && parts.length ? parts : splitSpeech(text);
+    const fetchPart = (part) => this.remote.synthesize(part, settings.rate).catch(() => null);
+    let next = fetchPart(queue[0]);
+    for (let i = 0; i < queue.length; i++) {
+      const data = await next;
+      if (generation !== this.generation || !this.isEnabled()) return;
+      if (!data) {
+        this.onError("Сервер не смог озвучить ответ. Он показан текстом.");
+        return;
+      }
+      next = i + 1 < queue.length ? fetchPart(queue[i + 1]) : null;
+      await this.playWav(data, settings.volume);
+      if (generation !== this.generation) return;
     }
-    if (!data || !data.byteLength || generation !== this.generation || !this.isEnabled()) return;
+  }
+
+  playWav(data, volume) {
+    if (!data.byteLength) return Promise.resolve();
     const url = URL.createObjectURL(new Blob([data], { type: "audio/wav" }));
     const player = new window.Audio(url);
-    player.volume = settings.volume;
-    await new Promise((resolve) => {
+    player.volume = volume;
+    return new Promise((resolve) => {
       let timer;
       const done = () => {
         clearTimeout(timer);
@@ -246,3 +273,4 @@ class PlannerAudio {
 }
 
 window.PlannerAudio = PlannerAudio;
+window.splitSpeech = splitSpeech;

@@ -34,6 +34,7 @@ from app.container import USER_ID_RX, Container, build
 from app.dialog import phrases as ph
 from app.models import Item
 from app.services.ics import build_calendar
+from app.voice.tts import split_speech
 from app.voice.vosk_stt import AudioFormatError, BusyError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -149,6 +150,8 @@ class ChatIn(BaseModel):
     text: str = Field(max_length=1000)
     session_id: str = Field(default="default", max_length=100)
     collect_details: bool = False
+    # страница озвучит ответ голосом сервера с этой скоростью — сервер начнёт синтез сразу
+    tts_rate: float | None = Field(default=None, ge=0.5, le=2)
 
 
 class ChatOut(BaseModel):
@@ -159,13 +162,18 @@ class ChatOut(BaseModel):
     nlu: str
     items: list[ItemOut]
     changed: list[int]
+    speech_parts: list[str] = []  # части speech для озвучки на сервере (если голос сервера подключён)
 
 
 @app.post("/api/chat", response_model=ChatOut)
 def chat(body: ChatIn, x_user_id: str | None = Header(default=None)):
     r = c().dialog.handle(body.session_id, body.text, _user(x_user_id), collect_details=body.collect_details)
-    return ChatOut(reply=r.text, speech=r.speech or r.text, intent=r.intent, awaiting=r.awaiting, nlu=r.nlu,
-                   items=[item_out(i) for i in r.items[:30]], changed=r.changed)
+    speech = r.speech or r.text
+    parts = split_speech(speech) if c().tts is not None else []
+    if parts and body.tts_rate:
+        c().tts.prefetch(parts, body.tts_rate)  # пока ответ идёт до страницы, первая часть уже озвучивается
+    return ChatOut(reply=r.text, speech=speech, intent=r.intent, awaiting=r.awaiting, nlu=r.nlu,
+                   items=[item_out(i) for i in r.items[:30]], changed=r.changed, speech_parts=parts)
 
 
 @app.post("/api/session/reset")

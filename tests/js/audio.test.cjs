@@ -189,3 +189,29 @@ test("server failure and missing Russian voice are reported, not spoken garbled"
   assert.equal(await failed, true);
   assert.ok(second.events.some((e) => e.includes("Сервер не смог озвучить")));
 });
+
+test("long answers play part by part, fetching the next part while the current one sounds", async () => {
+  const server = fakeServer();
+  const { audio, players, settings } = setup({ voices: [], remote: server.remote });
+  settings.voice = "server";
+  const done = audio.play("Не используется", { parts: ["Завтра две записи.", "В 10 — созвон; в 12 — обед."] });
+  await settle();
+  assert.deepEqual(server.calls.map((c) => c.text), ["Завтра две записи.", "В 10 — созвон; в 12 — обед."],
+    "the second part is requested as soon as the first starts playing");
+  assert.equal(players.length, 1);
+  players[0].onended();
+  await settle();
+  assert.equal(players.length, 2);
+  players[1].onended();
+  assert.equal(await done, true);
+});
+
+test("text without server parts is split like on the server", () => {
+  const window = {};
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, "../../app/static/audio.js"), "utf8"), vm.createContext({ window }));
+  const split = (text) => Array.from(window.splitSpeech(text));  // массив из другого контекста vm
+  assert.deepEqual(split("Встреча добавлена: «Созвон», завтра в 15:00–16:00."),
+    ["Встреча добавлена:", "«Созвон», завтра в 15:00–16:00."]);
+  assert.deepEqual(split("Готово."), ["Готово."]);
+  assert.deepEqual(split("  "), []);
+});

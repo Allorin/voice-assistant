@@ -141,8 +141,10 @@ async function send(text, viaVoice = false) {
   addMessage("user", text);
   const typing = addMessage("assistant typing", "Думаю");
   try {
+    // голос сервера: сервер начнёт озвучивать ответ сразу, не дожидаясь отдельного запроса страницы
+    const ttsRate = state.speak && await audio.useServer() ? state.audioSettings.rate : null;
     const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ text, session_id: state.sessionId,
-      collect_details: state.audioSettings.details }) });
+      collect_details: state.audioSettings.details, tts_rate: ttsRate }) });
     typing.remove();
     const showItems = ["create", "update", "complete", "reopen", "search"].includes(data.intent) ? data.items : [];
     // если записи показаны карточками, из текста убираем их дубли-строки
@@ -152,7 +154,7 @@ async function send(text, viaVoice = false) {
     addMessage("assistant", shown, { items: showItems, changed: data.changed, clarify: !!data.awaiting });
     // если человек говорил голосом и ассистент задал вопрос — сразу слушаем ответ
     const listenAfter = viaVoice && data.awaiting && canListen();
-    say(data.speech, listenAfter ? () => startListening() : null);
+    say(data.speech, listenAfter ? () => startListening() : null, data.speech_parts);
     if (data.changed.length || ["create", "update", "delete", "complete", "reopen"].includes(data.intent)) {
       loadAgenda(data.changed);
     }
@@ -221,8 +223,8 @@ function saveAudioSettings() {
   syncAudioSettings();
 }
 
-function say(text, onEnd) {
-  return audio.play(text, { onEnd: onEnd || (() => {}) });
+function say(text, onEnd, parts = null) {
+  return audio.play(text, { onEnd: onEnd || (() => {}), parts });
 }
 
 function setSpeak(on) {

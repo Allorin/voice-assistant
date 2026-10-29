@@ -57,6 +57,12 @@ class Session:
     touched: float = field(default_factory=_time.monotonic)
     # итог прерванного уточнения («сохранено …» / «не сохранено …»): добавляется к ответу на новую команду
     carry: object | None = None
+    # обсуждаемый день или период: «а вечером?», «и ещё созвон в 14», «в этот день» относятся к нему
+    turn: int = 0
+    focus_day: date | None = None
+    focus_period: tuple[datetime, datetime] | None = None
+    focus_turn: int = 0
+    focus_at: float = 0.0
 
 
 class SessionStore:

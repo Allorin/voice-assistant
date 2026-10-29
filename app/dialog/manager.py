@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import time as _time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -40,6 +41,19 @@ _BULK_YES = re.compile(r"^(?:(?:да|ага|угу|конечно|подтвер
 _ALL_TIME = re.compile(r"^(?:за\s+)?(?:вс[её](?:\s+время)?|вообще\s+вс[её]|все\s+сразу|все\s+записи|везде"
                        r"|без\s+периода|любой\s+период|целиком)[\s.!]*$", re.IGNORECASE)
 ALL_TIME = (datetime(1900, 1, 1), datetime(2200, 1, 1))
+
+# Контекст разговора о дне. Явная отсылка к обсуждаемому дню — убирается из текста перед разбором
+_SAME_DAY = re.compile(r"(?:\b(?:в|на)\s+(?:этот|тот)(?:\s+же)?\s+(?:день|дату|число)|\bтем\s+же\s+днём|\bтуда\s+же)"
+                       r"(?=[\s,.!?]|$)", re.IGNORECASE)
+# Продолжение разговора в начале фразы: «а вечером?», «и ещё созвон в 14», «тогда в 12»
+_CONTINUE = re.compile(r"^(?:(?:а|и|ну|тогда|также|плюс|ещё|еще)(?!\s+раз\b)(?=[\s,]|$)[\s,]*)+", re.IGNORECASE)
+_WEEKDAY_ONLY = re.compile(r"^(?:в\s+|во\s+|на\s+)?(понедельник|вторник|сред[уа]|четверг|пятниц[уа]|суббот[уа]"
+                           r"|воскресенье)[\s?!.]*$", re.IGNORECASE)
+_WEEKDAY_INDEX = {"пон": 0, "вто": 1, "сре": 2, "чет": 3, "пят": 4, "суб": 5, "вос": 6}
+# ответ на «Поставить на пятницу или на сегодня?» в пользу обсуждаемого дня
+_FOCUS_ANSWER = re.compile(r"\b(?:туда|тот|той|тогда|этот|эту|перв\w*)\b", re.IGNORECASE)
+FOCUS_TURNS = 4          # обсуждаемый день помнится несколько реплик…
+FOCUS_SECONDS = 10 * 60  # …и не дольше 10 минут
 
 _QUESTION_FOR = {Intent.UPDATE: "Какую перенести?", Intent.DELETE: "Какую удалить?",
                  Intent.COMPLETE: "Какую отметить выполненной?", Intent.REOPEN: "С какой снять отметку?"}
@@ -140,6 +154,7 @@ class DialogManager:
         user = user or self.default_user
         s = self.sessions.get(session_id, user)
         s.collect_details = collect_details
+        s.turn += 1
         now = self.service.now()
         text = (text or "").strip()
         if not text:
@@ -147,9 +162,10 @@ class DialogManager:
 
         reply = self._continue_pending(s, user, text, now) if s.pending else None
         if reply is None:
+            nlu_text, ref = self._context_ref(text)
             ctx = NLUContext(now=now, last_item_title=self._last_title(s, user), history=list(s.history))
-            cmd = self.nlu.parse(text, ctx)
-            reply = self._dispatch(s, user, cmd, text, now)
+            cmd = self.nlu.parse(nlu_text, ctx)
+            reply = self._dispatch(s, user, cmd, nlu_text, now, ref)
             reply.nlu = cmd.source
         if s.carry is not None:
             reply = self._with_carry(s.carry, reply)
@@ -164,11 +180,37 @@ class DialogManager:
                      intent=reply.intent, awaiting=reply.awaiting, nlu=reply.nlu,
                      changed=[*before.changed, *reply.changed])
 
-    def _dispatch(self, s: Session, user: str, cmd: Command, text: str, now: datetime) -> Reply:
+    # ================================================================ обсуждаемый день
+
+    @staticmethod
+    def _context_ref(text: str) -> tuple[str, str | None]:
+        """Текст для разбора и тип отсылки к обсуждаемому дню: explicit — «в этот день», «туда же»;
+        continue — фраза-продолжение («а вечером?», «и ещё…»); None — нет отсылки."""
+        stripped = _SAME_DAY.sub(" ", text)
+        ref = "explicit" if stripped != text else None
+        head = _CONTINUE.match(stripped.strip())
+        if head and head.end():
+            stripped = stripped.strip()[head.end():]
+            ref = ref or "continue"
+        stripped = re.sub(r"\s+", " ", stripped).strip(" ,")
+        return (stripped or text), ref
+
+    @staticmethod
+    def _focus(s: Session) -> tuple[date | None, tuple[datetime, datetime] | None]:
+        if s.turn - s.focus_turn > FOCUS_TURNS or _time.monotonic() - s.focus_at > FOCUS_SECONDS:
+            return None, None
+        return s.focus_day, s.focus_period
+
+    @staticmethod
+    def _set_focus(s: Session, day: date | None = None, period: tuple[datetime, datetime] | None = None) -> None:
+        s.focus_day, s.focus_period = day, period
+        s.focus_turn, s.focus_at = s.turn, _time.monotonic()
+
+    def _dispatch(self, s: Session, user: str, cmd: Command, text: str, now: datetime, ref: str | None = None) -> Reply:
         if cmd.intent == Intent.CREATE:
-            return self._create(s, user, cmd, now)
+            return self._create(s, user, cmd, now, ref)
         if cmd.intent == Intent.LIST:
-            return self._list(s, user, cmd, now)
+            return self._list(s, user, cmd, now, ref)
         if cmd.intent == Intent.SEARCH:
             return self._search(s, user, cmd, now)
         if cmd.intent in _ACT_INTENTS:
@@ -193,7 +235,7 @@ class DialogManager:
 
     # ================================================================ создание
 
-    def _create(self, s: Session, user: str, cmd: Command, now: datetime) -> Reply:
+    def _create(self, s: Session, user: str, cmd: Command, now: datetime, ref: str | None = None) -> Reply:
         when = cmd.when or ""
         rep = parse_repeat(cmd.repeat) if cmd.repeat else None
         if rep is None or rep.rule is None:
@@ -202,8 +244,22 @@ class DialogManager:
             if in_when.rule is not None:
                 rep, when = in_when, in_when.rest
         info = parse(when, now, "future")
-        due, has_time = creation_moment(info, now)
         rule = rep.rule if rep else None
+        focus_day, _ = self._focus(s)
+        no_day = rule is None and not info.error and not info.has_date and info.period is None
+        ask_day = None
+        if no_day and focus_day is not None and (ref == "explicit" or (ref == "continue" and info.has_time)):
+            # «в этот день в 9», «и ещё созвон в 14» — на обсуждаемый день
+            info = parse(f"{focus_day.isoformat()} {when}", now, "future")
+        elif no_day and ref == "explicit":
+            ask_day = "На какой день поставить?"  # «туда же», а о каком дне речь — неизвестно
+        elif (no_day and ref is None and focus_day is not None and info.has_time and info.moment is not None
+              and info.moment.date() != focus_day and datetime.combine(focus_day, info.moment.time()) > now):
+            # только время, а до этого обсуждали другой день — спрашиваем, а не угадываем
+            first = ph.on_day_phrase(focus_day, now.date())
+            ask_day = (f"Поставить {first}{',' if ',' in first else ''} "
+                       f"или {ph.on_day_phrase(info.moment.date(), now.date())}?")
+        due, has_time = creation_moment(info, now)
         if rule is not None and not has_time and rep.default_time:
             due, has_time = datetime.combine(due.date() if due else now.date(), rep.default_time), True
         draft = Draft(
@@ -220,6 +276,10 @@ class DialogManager:
         if info.error:
             return self._ask(s, info.error, Pending("slot", "create", info.error, slot="datetime", draft=draft),
                              "datetime")
+        if ask_day:
+            slot = "day" if focus_day is not None else "date"
+            return self._ask(s, ask_day, Pending("slot", "create", ask_day, slot=slot, draft=draft, day=focus_day),
+                             "date")
         return self._proceed(s, user, draft, now)
 
     def _ask(self, s: Session, question: str, pending: Pending, awaiting: str, speech: str | None = None) -> Reply:
@@ -289,6 +349,8 @@ class DialogManager:
             recurrence=d.recurrence.to_rrule() if d.recurrence else None))
         s.pending = None
         s.last_ids = [item.id]
+        if d.has_date and item.due_at is not None:
+            self._set_focus(s, day=item.due_at.date())
         extra = f" Напомню за {d.remind_before_min} {ph.plural(d.remind_before_min, ('минуту', 'минуты', 'минут'))}." \
             if d.remind_before_min else ""
         return Reply(self._created_text(item, d, today) + extra + conflict_note, items=[item], intent="create",
@@ -339,6 +401,9 @@ class DialogManager:
             return self._continue_bulk_delete(s, user, p, text, now)
         if p.kind == "enrich":
             return self._continue_enrichment(s, user, p, text, now)
+        if p.kind == "slot" and p.slot == "day" and p.draft is not None and p.day is not None \
+                and not _CANCEL.match(text):
+            return self._continue_day_choice(s, user, p, text, now)
         if _CANCEL.match(text) or (p.kind != "confirm" and _NO.match(text) and len(text.split()) <= 3):
             s.pending = None
             return Reply("Хорошо, отменено.", intent="cancel")
@@ -435,6 +500,32 @@ class DialogManager:
             return Reply(f"Не получилось разобрать. {p.question}{hint}", intent="clarify", awaiting=p.slot)
         s.pending = None
         return None
+
+    def _continue_day_choice(self, s: Session, user: str, p: Pending, text: str, now: datetime) -> Reply | None:
+        """Ответ на «Поставить на пятницу, или на сегодня?»."""
+        d = p.draft
+        assert d is not None and p.day is not None and d.due is not None
+        new = self._is_new_command(text, now, expecting_value=False)
+        if new is not None and new.intent != Intent.CREATE:  # вместо ответа — вопрос или другая команда
+            s.pending = None
+            s.carry = Reply(f"«{d.title}» не сохранено: день не выбран.", intent="cancel")
+            return None
+        choice = parse_ordinal(text, 2)
+        info = parse(text, now, "future")
+        if info.has_date or info.error:  # «на сегодня», «в пятницу», «на завтра в 11»
+            return self._fill_time(s, user, d, info, now)
+        if choice is None and (_FOCUS_ANSWER.search(text) or _YES.match(text)):
+            choice = 0
+        if choice is not None:
+            day = p.day if choice == 0 else d.due.date()
+            d.due, d.has_date = datetime.combine(day, d.due.time()), True
+            return self._proceed(s, user, d, now)
+        p.attempts += 1
+        if p.attempts >= 2:
+            s.pending = None
+            return Reply("Не получилось разобрать ответ, действие отменено. Попробуйте сказать запрос целиком, "
+                         "с днём и временем.", intent="cancel")
+        return Reply(f"Не получилось разобрать. {p.question}", intent="clarify", awaiting="date")
 
     def _continue_enrichment(self, s: Session, user: str, p: Pending, text: str, now: datetime) -> Reply | None:
         d = p.draft
@@ -610,13 +701,19 @@ class DialogManager:
 
     # ================================================================ список и поиск
 
-    def _list(self, s: Session, user: str, cmd: Command, now: datetime) -> Reply:
+    def _list(self, s: Session, user: str, cmd: Command, now: datetime, ref: str | None = None) -> Reply:
         today = now.date()
         prefer = {"past": "past", "future": "future"}.get(cmd.tense, "nearest")
         info = parse(cmd.period or "", now, prefer)
         if info.error:
             return Reply(info.error, intent="clarify")
-        rng = info.query_range()
+        rng = self._context_range(s, cmd, info, ref, now, prefer) if ref and not cmd.query else None
+        if rng is None and ref == "explicit" and not info.found:
+            return Reply("О каком дне речь? Назовите день, например: «что у меня в пятницу».", intent="clarify")
+        rng = rng or info.query_range()
+        if rng is not None and (info.found or ref):
+            single = rng[1] - rng[0] <= timedelta(days=1) and rng[0].date() == (rng[1] - timedelta(seconds=1)).date()
+            self._set_focus(s, day=rng[0].date()) if single else self._set_focus(s, period=rng)
         if rng is None:
             if cmd.query:
                 return self._search(s, user, cmd, now)
@@ -673,6 +770,28 @@ class DialogManager:
         self._remember(s, items[:10])
         return Reply("\n".join(lines), speech, items=items, intent="list")
 
+    def _context_range(self, s: Session, cmd: Command, info: TimeInfo, ref: str, now: datetime,
+                       prefer: str) -> tuple[datetime, datetime] | None:
+        """Период для «а вечером?», «а что ещё?», «а что в среду?» — из обсуждаемого дня или недели."""
+        focus_day, focus_period = self._focus(s)
+        if not info.found:  # «а что ещё?», «что ещё в этот день?»
+            if focus_day is not None:
+                start = datetime.combine(focus_day, time())
+                return start, start + timedelta(days=1)
+            return focus_period
+        if not info.has_date and focus_day is not None:  # «а вечером?» — вечер обсуждаемого дня
+            return parse(f"{focus_day.isoformat()} {cmd.period}", now, prefer).query_range()
+        weekday = _WEEKDAY_ONLY.match(cmd.period or "")
+        if weekday and focus_period is not None:  # «а что в среду?» после «планы на следующую неделю»
+            wanted = _WEEKDAY_INDEX[weekday.group(1).lower()[:3]]
+            day = focus_period[0].date()
+            while day < focus_period[1].date():
+                if day.weekday() == wanted:
+                    start = datetime.combine(day, time())
+                    return start, start + timedelta(days=1)
+                day += timedelta(days=1)
+        return None
+
     def _search(self, s: Session, user: str, cmd: Command, now: datetime) -> Reply:
         today = now.date()
         query = (cmd.query or "").strip()
@@ -724,6 +843,8 @@ class DialogManager:
                 text += ("\nРанее:\n" if is_past else "\nДальше:\n") + "\n".join(
                     f"• {ph.item_line(it, today)}" for it in others)
             self._remember(s, [best.item])
+            if best.item.due_at is not None:  # «когда встреча с Иваном?» → «а что ещё в этот день?»
+                self._set_focus(s, day=best.item.due_at.date())
             return Reply(text, text.split("\n")[0], items=[best.item, *others], intent="search")
 
         top = [h.item for h in hits[:5]]
@@ -1086,6 +1207,8 @@ class DialogManager:
             return Reply(f"Перенесено: «{updated.title}» — теперь {ph.series_when(updated)}. "
                          f"Ближайший раз — {ph.day_phrase(due.date(), today)}.{note}",
                          items=[updated], intent="update", changed=[item.id])
+        if due is not None:
+            self._set_focus(s, day=due.date())
         return Reply(f"Перенесено: «{updated.title}» — теперь {ph.when_phrase(due, has_time, today, updated.duration_min)}.{note}",
                      items=[updated], intent="update", changed=[item.id])
 

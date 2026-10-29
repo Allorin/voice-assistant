@@ -2,6 +2,8 @@
 import importlib.machinery
 import io
 import sys
+import threading
+import time
 import types
 import wave
 from dataclasses import replace
@@ -12,7 +14,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.clock import FixedClock
 from app.container import build
-from app.voice.tts import PiperTextToSpeech, piper_available, speakable
+from app.voice.tts import PiperTextToSpeech, piper_available, speakable, split_speech
 from tests.conftest import NOW, make_settings
 
 
@@ -62,6 +64,17 @@ def test_speakable_reads_times_like_people_do():
     assert len(speakable("а" * 5000)) == 600
 
 
+def test_split_speech_starts_with_a_short_phrase():
+    assert split_speech("Встреча добавлена: «Созвон», завтра в 15:00–16:00.") == \
+        ["Встреча добавлена:", "«Созвон», завтра в 15:00–16:00."]
+    assert split_speech("Готово.") == ["Готово."]
+    assert split_speech("   ") == []
+    long = "Я умею: " + "создавать задачи, встречи и напоминания; " * 4 + "искать записи. Скажите: «Напомни завтра»."
+    parts = split_speech(long)
+    assert parts[0] == "Я умею:" and " ".join(parts) == long
+    assert all(len(p) >= 90 for p in parts[1:-1])  # середина собрана в крупные части — меньше пауз
+
+
 def test_piper_available_needs_model_config_and_package(fake_piper, voice_file, tmp_path, monkeypatch):
     assert piper_available(voice_file)
     assert not piper_available("")
@@ -87,6 +100,35 @@ def test_synthesize_returns_wav_and_caches(fake_piper, voice_file):
     assert tts.synthesize("  «»  ") == b""
 
 
+def test_same_part_is_synthesized_once_for_parallel_requests(fake_piper, voice_file, monkeypatch):
+    tts = PiperTextToSpeech(voice_file)
+    real_render = tts._render
+
+    def slow_render(text, rate):
+        time.sleep(0.2)
+        return real_render(text, rate)
+
+    monkeypatch.setattr(tts, "_render", slow_render)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(tts.synthesize("Одна фраза"))) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(fake_piper["texts"]) == 1 and len(set(results)) == 1
+
+
+def test_preload_warms_up_and_prefetch_fills_cache(fake_piper, voice_file):
+    tts = PiperTextToSpeech(voice_file)
+    tts.preload()
+    assert fake_piper["texts"] == ["Готово."]  # прогрев: первый синтез после загрузки медленный
+    tts.prefetch(["Первая.", "Вторая часть."], 1.05)
+    tts._background.submit(lambda: None).result(timeout=5)  # дождаться фоновой очереди
+    assert fake_piper["texts"][1:] == ["Первая.", "Вторая часть."]
+    tts.synthesize("Первая.", 1.05)
+    assert len(fake_piper["texts"]) == 3  # страница получила часть из кэша
+
+
 def test_rate_changes_speed_within_slider_limits(fake_piper, voice_file):
     tts = PiperTextToSpeech(voice_file)
     tts.synthesize("Быстро", rate=1.2)
@@ -104,12 +146,21 @@ def test_api_tts(fake_piper, voice_file):
     assert r.content.startswith(b"RIFF")
     assert c.post("/api/tts", json={"text": ""}).status_code == 422
 
+    # ответ чата приходит с частями для озвучки; с tts_rate сервер сразу начинает их синтезировать
+    r = c.post("/api/chat", json={"text": "привет", "session_id": "t"}).json()
+    assert r["speech_parts"] and " ".join(r["speech_parts"]) == " ".join(r["speech"].split())
+    before = len(fake_piper["texts"])
+    r = c.post("/api/chat", json={"text": "что ты умеешь", "session_id": "t", "tts_rate": 1.05}).json()
+    main.container.tts._background.submit(lambda: None).result(timeout=5)
+    assert fake_piper["texts"][before:] == [speakable(p) for p in r["speech_parts"]]
+
 
 def test_api_tts_not_configured():
     main.container = build(make_settings(seed=False), FixedClock(NOW))
     c = TestClient(main.app)
     assert c.get("/api/status").json()["tts_server"] is False
     assert c.post("/api/tts", json={"text": "Привет"}).status_code == 501
+    assert c.post("/api/chat", json={"text": "привет", "tts_rate": 1}).json()["speech_parts"] == []
 
 
 def test_download_voice_script(tmp_path, monkeypatch):
