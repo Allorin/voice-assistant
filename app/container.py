@@ -95,7 +95,7 @@ def build(settings: Settings, clock: Clock | None = None) -> Container:
     except Exception as exc:  # битый сертификат или настройки LLM не должны мешать запуску на правилах
         log.warning("LLM не подключена, работают правила: %s", exc)
         llm = None
-    nlu = HybridNLU(RuleNLU(), llm)
+    nlu = HybridNLU(RuleNLU(), llm, always_llm=settings.llm_always)
 
     stt = build_stt(settings)
     dialog = DialogManager(nlu, service, SessionStore(), settings.default_user)

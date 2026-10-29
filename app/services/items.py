@@ -7,7 +7,10 @@
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+import threading
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from app.clock import Clock
@@ -53,11 +56,47 @@ def _filter_status(items: Iterable[Item], statuses: Iterable[ItemStatus] | None)
     return [it for it in items if it.status in allowed]
 
 
+@dataclass
+class UndoStep:
+    label: str          # что отменяется: «добавление «Встреча с Олегом»»
+    changes: list       # прежнее состояние строк (ItemRepository.recording)
+
+
 class ItemService:
+    UNDO_DEPTH = 10  # сколько последних действий можно отменить подряд
+
     def __init__(self, repo: ItemRepository, search: SearchEngine, clock: Clock):
         self.repo = repo
         self.search_engine = search
         self.clock = clock
+        self._undo: dict[str, list[UndoStep]] = {}
+        self._undo_lock = threading.Lock()
+
+    # ------------------------------------------------------------ отмена действий
+
+    @contextmanager
+    def undoable(self, user: str, label) -> Iterator[list]:
+        """Всё, что изменится внутри блока, отменяется одной командой «отмени последнее».
+        label — строка или функция без аргументов (название узнаётся после действия)."""
+        outer = not self.repo.recording_active()  # во вложенном блоке шаг записывает внешний
+        with self.repo.recording() as changes:
+            yield changes
+        if outer and changes:
+            with self._undo_lock:
+                stack = self._undo.setdefault(user, [])
+                stack.append(UndoStep(label() if callable(label) else label, list(changes)))
+                del stack[:-self.UNDO_DEPTH]
+
+    def undo(self, user: str) -> tuple[UndoStep, list[Item]] | None:
+        """Отменить последнее действие пользователя. None — отменять нечего."""
+        with self._undo_lock:
+            stack = self._undo.get(user)
+            if not stack:
+                return None
+            step = stack.pop()
+        ids = self.repo.restore(user, step.changes)
+        items = [it for i in dict.fromkeys(ids) if (it := self.repo.get(user, i)) is not None]
+        return step, items
 
     def now(self) -> datetime:
         return self.clock.now()

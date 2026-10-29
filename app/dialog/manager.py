@@ -160,13 +160,17 @@ class DialogManager:
         if not text:
             return Reply("Не удалось разобрать запрос. Повторите, пожалуйста.", intent="unknown")
 
-        reply = self._continue_pending(s, user, text, now) if s.pending else None
-        if reply is None:
-            nlu_text, ref = self._context_ref(text)
-            ctx = NLUContext(now=now, last_item_title=self._last_title(s, user), history=list(s.history))
-            cmd = self.nlu.parse(nlu_text, ctx)
-            reply = self._dispatch(s, user, cmd, nlu_text, now, ref)
-            reply.nlu = cmd.source
+        done: list[Reply] = []
+        # всё, что изменится за эту реплику, отменяется одной командой «отмени последнее»
+        with self.service.undoable(user, lambda: self._undo_label(done[0], changes)) as changes:
+            reply = self._continue_pending(s, user, text, now) if s.pending else None
+            if reply is None:
+                nlu_text, ref = self._context_ref(text)
+                ctx = NLUContext(now=now, last_item_title=self._last_title(s, user), history=list(s.history))
+                cmd = self.nlu.parse(nlu_text, ctx)
+                reply = self._dispatch(s, user, cmd, nlu_text, now, ref)
+                reply.nlu = cmd.source
+            done.append(reply)
         if s.carry is not None:
             reply = self._with_carry(s.carry, reply)
             s.carry = None
@@ -206,7 +210,38 @@ class DialogManager:
         s.focus_day, s.focus_period = day, period
         s.focus_turn, s.focus_at = s.turn, _time.monotonic()
 
+    # ================================================================ отмена
+
+    @staticmethod
+    def _undo_label(reply: Reply, changes: list) -> str:
+        """Что отменит «отмени последнее»: «добавление «Встреча с Олегом»», «удаление 3 записей»…"""
+        name = f"«{reply.items[0].title}»" if reply.items else ""
+        if reply.intent == "delete" and len(changes) > 1:
+            return f"удаление {len(changes)} {ph.plural(len(changes), ('записи', 'записей', 'записей'))}"
+        labels = {"create": "добавление", "delete": "удаление", "update": "изменение",
+                  "complete": "отметку о выполнении", "reopen": "снятие отметки с"}
+        head = labels.get(reply.intent, "последнее изменение")
+        return f"{head} {name}".strip() if head in labels.values() else head
+
+    def _undo(self, s: Session, user: str, now: datetime) -> Reply:
+        result = self.service.undo(user)
+        if result is None:
+            return Reply("Отменять нечего: изменений пока не было.", intent="undo")
+        step, items = result
+        s.pending = None
+        self._remember(s, items)
+        today = now.date()
+        text = f"Отменил {step.label}."
+        if len(items) == 1 and items[0].due_at is not None:
+            it = items[0]
+            text += f" «{it.title}» — {ph.when_phrase(it.due_at, it.has_time, today, it.duration_min)}."
+        elif items:
+            text += " Всё снова как было."
+        return Reply(text, items=items, intent="undo", changed=[it.id for it in items])
+
     def _dispatch(self, s: Session, user: str, cmd: Command, text: str, now: datetime, ref: str | None = None) -> Reply:
+        if cmd.intent == Intent.UNDO:
+            return self._undo(s, user, now)
         if cmd.intent == Intent.CREATE:
             return self._create(s, user, cmd, now, ref)
         if cmd.intent == Intent.LIST:
@@ -387,7 +422,7 @@ class DialogManager:
     def _is_new_command(self, text: str, now: datetime, expecting_value: bool = True) -> Command | None:
         """Не ответ на уточнение, а новая команда? expecting_value=False — ждали выбор, а не время/текст."""
         cmd = self.rules.parse(text, NLUContext(now=now))
-        if cmd.intent in (Intent.LIST, Intent.SEARCH, Intent.HELP, *_ACT_INTENTS):
+        if cmd.intent in (Intent.LIST, Intent.SEARCH, Intent.HELP, Intent.UNDO, *_ACT_INTENTS):
             return cmd
         if cmd.intent == Intent.CREATE and cmd.title and (
                 has_create_trigger(text) or cmd.repeat or (not expecting_value and cmd.when)):
@@ -397,6 +432,9 @@ class DialogManager:
     def _continue_pending(self, s: Session, user: str, text: str, now: datetime) -> Reply | None:
         p = s.pending
         assert p is not None
+        if self.rules.parse(text, NLUContext(now=now)).intent == Intent.UNDO:
+            s.pending = None  # «отмени последнее» посреди уточнения: вопрос снимается, отменяется сделанное
+            return None
         if p.action == "bulk_delete":
             return self._continue_bulk_delete(s, user, p, text, now)
         if p.kind == "enrich":

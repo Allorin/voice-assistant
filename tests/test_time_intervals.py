@@ -66,7 +66,7 @@ class DropsInterval:
 
 
 def test_rules_restore_interval_and_correction_when_llm_is_wrong(empty_container):
-    empty_container.dialog.nlu = HybridNLU(RuleNLU(), DropsInterval())
+    empty_container.dialog.nlu = HybridNLU(RuleNLU(), DropsInterval(), always_llm=True)
     first = empty_container.dialog.handle("a", "Напомни завтра с 13:40 до 13:50 что у меня встреча")
     assert first.items[0].type == ItemType.MEETING
     assert first.items[0].due_at == datetime(2026, 10, 21, 13, 40)

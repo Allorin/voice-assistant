@@ -84,7 +84,7 @@ def test_sdk_authenticates_reuses_and_refreshes_token(giga):
 
 def test_api_failure_falls_back_without_logging_credentials(giga, caplog):
     mock_http(giga, chat_status=403)
-    cmd = HybridNLU(RuleNLU(), giga).parse(PHRASE, NLUContext(now=NOW))
+    cmd = HybridNLU(RuleNLU(), giga, always_llm=True).parse(PHRASE, NLUContext(now=NOW))
     assert cmd.source == "rules-fallback" and cmd.title == "Позвонить Ивану"
     assert "HTTP 403" in caplog.text
     assert CREDENTIALS not in caplog.text and "private-token" not in caplog.text
@@ -92,7 +92,7 @@ def test_api_failure_falls_back_without_logging_credentials(giga, caplog):
 
 def test_invalid_model_json_falls_back(giga):
     mock_http(giga, content="Это не JSON")
-    cmd = HybridNLU(RuleNLU(), giga).parse(PHRASE, NLUContext(now=NOW))
+    cmd = HybridNLU(RuleNLU(), giga, always_llm=True).parse(PHRASE, NLUContext(now=NOW))
     assert cmd.source == "rules-fallback" and cmd.intent == Intent.CREATE
 
 

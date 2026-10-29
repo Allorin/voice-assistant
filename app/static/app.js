@@ -146,7 +146,7 @@ async function send(text, viaVoice = false) {
     const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ text, session_id: state.sessionId,
       collect_details: state.audioSettings.details, tts_rate: ttsRate }) });
     typing.remove();
-    const showItems = ["create", "update", "complete", "reopen", "search"].includes(data.intent) ? data.items : [];
+    const showItems = ["create", "update", "complete", "reopen", "search", "undo"].includes(data.intent) ? data.items : [];
     // если записи показаны карточками, из текста убираем их дубли-строки
     const shown = showItems.length
       ? data.reply.split("\n").filter((l) => l.trim() && !/^\s*•/.test(l) && !/^(Ранее|Дальше):$/.test(l.trim())).join("\n")
@@ -155,7 +155,7 @@ async function send(text, viaVoice = false) {
     // если человек говорил голосом и ассистент задал вопрос — сразу слушаем ответ
     const listenAfter = viaVoice && data.awaiting && canListen();
     say(data.speech, listenAfter ? () => startListening() : null, data.speech_parts);
-    if (data.changed.length || ["create", "update", "delete", "complete", "reopen"].includes(data.intent)) {
+    if (data.changed.length || ["create", "update", "delete", "complete", "reopen", "undo"].includes(data.intent)) {
       loadAgenda(data.changed);
     }
   } catch (err) {
@@ -390,7 +390,8 @@ async function startRecording() {
   let stream = null;
   recorder = new VoiceRecorder({
     onChunk: (pcm) => stream && stream.push(pcm),
-    onStop: (wav) => recognizeOnServer(wav, stream),
+    onLevel: (level) => els.mic.style.setProperty("--level", level.toFixed(2)),  // кольцо вокруг кнопки
+    onStop: (wav) => { showLevel(false); recognizeOnServer(wav, stream); },
   });
   try {
     await recorder.start();
@@ -404,8 +405,15 @@ async function startRecording() {
     stream = openSttStream(recorder.outputRate, (text) => { if (state.listening) els.input.value = text; });
   }
   els.input.value = "";
+  showLevel(true);
   setListening(true);
   hint("Слушаю… Говорите — после паузы запись остановится сама.");
+}
+
+// Индикатор громкости: видно, что микрофон слышит голос (при распознавании на сервере)
+function showLevel(on) {
+  els.mic.classList.toggle("metered", on);
+  els.mic.style.setProperty("--level", "0");
 }
 
 async function recognizeOnServer(wav, stream) {

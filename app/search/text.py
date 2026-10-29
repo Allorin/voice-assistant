@@ -60,6 +60,11 @@ def is_known_word(word: str) -> bool:
     return _morph.word_is_known(word)
 
 
+def morph_tag(word: str) -> str:
+    """Грамматические признаки самого вероятного разбора слова: «VERB,perf,tran sing,impr»."""
+    return str(_morph.parse(word.lower().replace("ё", "е"))[0].tag)
+
+
 def lemma(word: str) -> str:
     w = word.lower().replace("ё", "е")
     if w.isdigit() or not re.search(r"[а-я]", w):

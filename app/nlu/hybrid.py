@@ -5,12 +5,15 @@
 - LLM вернула команду без времени или текста, а правила их нашли → поля дополняются.
 - LLM не ответила два раза подряд → две минуты запросы к ней не отправляются: пользователь не ждёт таймаута
   на каждой реплике, пока сервис недоступен.
+- Правила разобрали реплику целиком и уверенно (app/nlu/confidence.py) → LLM не спрашиваем: ответ мгновенный,
+  токены не тратятся. Выключается always_llm (LLM_ALWAYS=1) — например, чтобы сравнить качество.
 """
 from __future__ import annotations
 
 import logging
 import time
 
+from app.nlu.confidence import rules_sure
 from app.nlu.rules import RuleNLU, clean_title, is_time_correction
 from app.nlu.schema import Command, Intent, NLUContext
 from app.timeparse.repeat import parse_repeat
@@ -23,9 +26,10 @@ class HybridNLU:
     FAILURES_BEFORE_PAUSE = 2
     PAUSE_SECONDS = 120.0
 
-    def __init__(self, rules: RuleNLU, llm=None):
+    def __init__(self, rules: RuleNLU, llm=None, always_llm: bool = False):
         self.rules = rules
         self.llm = llm
+        self.always_llm = always_llm
         self._failures = 0
         self._paused_until = 0.0
 
@@ -35,11 +39,14 @@ class HybridNLU:
 
     def parse(self, text: str, ctx: NLUContext) -> Command:
         by_rules = self.rules.parse(text, ctx)
-        if by_rules.intent == Intent.DELETE:
-            return by_rules  # область удаления и период определяются самой командой, а не догадкой LLM
+        if by_rules.intent in (Intent.DELETE, Intent.UNDO):
+            return by_rules  # удаление и отмена определяются самой командой, а не догадкой LLM
         if by_rules.intent == Intent.UPDATE and is_time_correction(text):
             return by_rules  # поправка к последней записи не должна становиться новым созданием
         if self.llm is None:
+            return by_rules
+        if not self.always_llm and rules_sure(text, by_rules, ctx.now):
+            by_rules.source = "rules-sure"
             return by_rules
         if time.monotonic() < self._paused_until:
             by_rules.source = "rules-fallback"

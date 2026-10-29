@@ -24,6 +24,7 @@ class Intent(str, Enum):
     COMPLETE = "complete"    # отметить выполненной
     REOPEN = "reopen"        # снять отметку о выполнении
     CANCEL = "cancel"        # «отмена», «не надо»
+    UNDO = "undo"            # «отмени последнее», «верни как было» — откатить последнее изменение
     HELP = "help"
     SMALLTALK = "smalltalk"  # привет / спасибо
     UNKNOWN = "unknown"

@@ -18,6 +18,7 @@ for %%S in (phrases holdout fresh) do (
     call :run %%S rules
     if "%LLM_OK%"=="0" (
         call :run %%S llm
+        call :run %%S llm-always
         call :run %%S llm-only
     )
 )
@@ -28,6 +29,9 @@ exit /b 0
 
 :run
 echo Набор %1, режим %2...
-"%PY%" scripts\eval_nlu.py --file eval\%1.jsonl --nlu %2 > eval\results\%1_%2.txt 2>> eval\results\warnings.txt
+rem llm — как на стенде (LLM только там, где правила не уверены); llm-always — LLM на каждой фразе
+set ARGS=--nlu %2
+if "%2"=="llm-always" set ARGS=--nlu llm --always-llm
+"%PY%" scripts\eval_nlu.py --file eval\%1.jsonl %ARGS% > eval\results\%1_%2.txt 2>> eval\results\warnings.txt
 findstr /b /c:"NLU:" /c:"LLM:" eval\results\%1_%2.txt
 exit /b 0

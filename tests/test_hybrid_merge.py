@@ -14,7 +14,7 @@ class StubLLM:
 
 
 def merged(text: str, llm_cmd: Command) -> Command:
-    return HybridNLU(RuleNLU(), StubLLM(llm_cmd)).parse(text, NLUContext(now=NOW))
+    return HybridNLU(RuleNLU(), StubLLM(llm_cmd), always_llm=True).parse(text, NLUContext(now=NOW))
 
 
 def test_list_period_status_and_tense_are_filled_from_rules():
@@ -62,7 +62,7 @@ def test_llm_outage_pauses_requests(monkeypatch):
 
     clock = [1000.0]
     monkeypatch.setattr("app.nlu.hybrid.time.monotonic", lambda: clock[0])
-    nlu = HybridNLU(RuleNLU(), DownLLM())
+    nlu = HybridNLU(RuleNLU(), DownLLM(), always_llm=True)
     ctx = NLUContext(now=NOW)
     for _ in range(5):
         cmd = nlu.parse("Напомни завтра в 10 позвонить Ивану", ctx)

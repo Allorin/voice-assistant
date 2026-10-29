@@ -202,7 +202,9 @@ def search(q: str, limit: int = 20, x_user_id: str | None = Header(default=None)
 @app.post("/api/items/{item_id}/complete", response_model=ItemOut)
 def complete(item_id: int, on: date | None = None, x_user_id: str | None = Header(default=None)):
     """Отметить выполненной. Для серии on — дата повторения (по умолчанию — ближайшее невыполненное)."""
-    item = c().service.complete(_user(x_user_id), item_id, on)
+    user = _user(x_user_id)
+    with c().service.undoable(user, lambda: f"отметку о выполнении «{item.title}»" if item else ""):
+        item = c().service.complete(user, item_id, on)
     if item is None:
         raise HTTPException(404, "Запись не найдена")
     return item_out(item)
@@ -211,7 +213,9 @@ def complete(item_id: int, on: date | None = None, x_user_id: str | None = Heade
 @app.post("/api/items/{item_id}/reopen", response_model=ItemOut)
 def reopen(item_id: int, on: date | None = None, x_user_id: str | None = Header(default=None)):
     """Снять отметку о выполнении (например, если галочку поставили случайно)."""
-    item = c().service.reopen(_user(x_user_id), item_id, on)
+    user = _user(x_user_id)
+    with c().service.undoable(user, lambda: f"снятие отметки с «{item.title}»" if item else ""):
+        item = c().service.reopen(user, item_id, on)
     if item is None:
         raise HTTPException(404, "Запись не найдена")
     return item_out(item)
@@ -221,14 +225,15 @@ def reopen(item_id: int, on: date | None = None, x_user_id: str | None = Header(
 def delete(item_id: int, on: date | None = None, x_user_id: str | None = Header(default=None)):
     """Удалить запись. Для серии с on — только повторение в этот день, без on — всю серию."""
     user = _user(x_user_id)
-    if on is not None:
-        item = c().service.get(user, item_id)
-        if item is not None and item.rule is not None:
+    item = c().service.get(user, item_id)
+    # удаление кнопкой тоже отменяется голосом: «отмени последнее»
+    with c().service.undoable(user, f"удаление «{item.title}»" if item else "удаление"):
+        if on is not None and item is not None and item.rule is not None:
             if c().service.skip_occurrence(user, item_id, on) is None:
                 raise HTTPException(404, "В этот день повторения нет")
             return {"ok": True, "deleted": "occurrence"}
-    if not c().service.delete(user, item_id):
-        raise HTTPException(404, "Запись не найдена")
+        if not c().service.delete(user, item_id):
+            raise HTTPException(404, "Запись не найдена")
     return {"ok": True, "deleted": "item"}
 
 

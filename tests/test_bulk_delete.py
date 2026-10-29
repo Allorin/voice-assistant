@@ -189,7 +189,7 @@ class WrongDeleteLLM:
 def test_model_cannot_replace_bulk_scope_with_last_item(empty_container):
     c = empty_container
     model = WrongDeleteLLM()
-    c.dialog.nlu = HybridNLU(RuleNLU(), model)
+    c.dialog.nlu = HybridNLU(RuleNLU(), model, always_llm=True)
     add(c, "Сегодня")
     tomorrow = add(c, "Завтра", days=1)
     c.dialog.sessions.get("s").last_ids = [tomorrow.id]

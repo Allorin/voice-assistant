@@ -44,6 +44,12 @@ function toPcm16(samples) {
   return out;
 }
 
+// Громкость для индикатора на кнопке микрофона: 0 — тишина, 1 — громкая речь (логарифмическая шкала, как слышит ухо)
+function levelFromRms(value) {
+  if (!(value > 0.004)) return 0;
+  return Math.min(1, Math.log10(value / 0.004) / Math.log10(0.25 / 0.004));
+}
+
 function rms(samples) {
   let sum = 0;
   for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
@@ -75,9 +81,11 @@ class SpeechEndDetector {
 }
 
 class VoiceRecorder {
-  constructor({ onStop, onChunk, detector = {} } = {}) {
+  constructor({ onStop, onChunk, onLevel, detector = {} } = {}) {
     this.onStop = onStop || (() => {});
     this.onChunk = onChunk || null;
+    this.onLevel = onLevel || null;
+    this.level = 0;
     this.detectorOptions = detector;
     this.active = false;
   }
@@ -108,7 +116,11 @@ class VoiceRecorder {
       const data = new Float32Array(e.inputBuffer.getChannelData(0));
       this.chunks.push(data);
       if (this.onChunk) this.onChunk(toPcm16(downsample(data, this.context.sampleRate).samples));
-      const reason = this.detector.push(rms(data), (data.length / this.context.sampleRate) * 1000);
+      const loudness = rms(data);
+      // быстрый подъём и плавный спад — индикатор не дёргается между слогами
+      this.level = Math.max(levelFromRms(loudness), this.level * 0.8);
+      if (this.onLevel) this.onLevel(this.level);
+      const reason = this.detector.push(loudness, (data.length / this.context.sampleRate) * 1000);
       if (reason) this.stop(reason);
     };
     this.source.connect(this.processor);
@@ -135,4 +147,4 @@ class VoiceRecorder {
 }
 
 window.VoiceRecorder = VoiceRecorder;
-window.VoiceRecorderInternals = { downsample, encodeWav, toPcm16, rms, SpeechEndDetector };
+window.VoiceRecorderInternals = { downsample, encodeWav, toPcm16, rms, levelFromRms, SpeechEndDetector };

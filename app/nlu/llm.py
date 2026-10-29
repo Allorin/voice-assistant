@@ -22,7 +22,7 @@ SYSTEM_PROMPT = """Ты — модуль понимания запросов г�
 Сейчас: {now} ({weekday}).
 {context}
 Верни ровно один JSON-объект без пояснений и без markdown:
-{{"intent": "create|list|search|update|delete|complete|reopen|cancel|help|smalltalk|unknown",
+{{"intent": "create|list|search|update|delete|complete|reopen|cancel|undo|help|smalltalk|unknown",
  "item_type": "task|meeting|reminder|null",
  "title": "строка или null",
  "when": "строка или null",
@@ -70,7 +70,8 @@ SYSTEM_PROMPT = """Ты — модуль понимания запросов г�
 - «Удали все планы на сегодня», «удали все встречи на завтра» — delete, bulk=true,
   period — дословный период, target_last=false. Для всех планов query=null и item_type=null.
   Никогда не заменяй «все планы» последней обсуждавшейся записью. Отсутствующий период не придумывай.
-- cancel — «отмена», «не надо». help — «что ты умеешь». smalltalk — приветствие или благодарность,
+- cancel — «отмена», «не надо» (отказ от текущего вопроса). undo — отменить уже сделанное последнее действие
+  («отмени последнее», «верни как было»). help — «что ты умеешь». smalltalk — приветствие или благодарность,
   тогда reply — короткий дружелюбный ответ на русском.
 - unknown — запрос не про задачи, встречи и напоминания."""
 

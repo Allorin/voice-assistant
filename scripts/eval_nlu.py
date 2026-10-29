@@ -70,6 +70,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--nlu", choices=["rules", "llm", "llm-only"], default="rules")
     ap.add_argument("--file", default=str(ROOT / "eval" / "phrases.jsonl"))
+    ap.add_argument("--always-llm", action="store_true",
+                    help="с --nlu llm: спрашивать LLM на каждой фразе, даже когда правила уверены")
     args = ap.parse_args()
 
     llm = None
@@ -79,12 +81,14 @@ def main() -> None:
             sys.exit("LLM не настроена: заполните GIGACHAT_CREDENTIALS (LLM_PROVIDER=gigachat) "
                      "или LLM_BASE_URL и LLM_MODEL в .env")
         llm = create_llm(s)
-    nlu = HybridNLU(RuleNLU(), llm)
+    nlu = HybridNLU(RuleNLU(), llm, always_llm=args.always_llm)
     mode = nlu.mode if args.nlu != "llm-only" else "llm-only"
+    if args.nlu == "llm":
+        mode += " (LLM на каждой фразе)" if args.always_llm else " (LLM, только когда правила не уверены)"
 
     rows = [json.loads(line) for line in Path(args.file).read_text(encoding="utf-8").splitlines() if line.strip()]
     ok_intent = ok_full = 0
-    llm_answers = llm_errors = 0
+    llm_answers = llm_errors = rules_sure = 0
     started = time.perf_counter()
     for row in rows:
         ctx = NLUContext(now=NOW)
@@ -98,6 +102,7 @@ def main() -> None:
         else:
             cmd = nlu.parse(row["text"], ctx)
         llm_answers += cmd.source == "llm"
+        rules_sure += cmd.source == "rules-sure"
         errors = check(cmd, row)
         ok_intent += cmd.intent.value == row["intent"]
         ok_full += not errors
@@ -109,7 +114,8 @@ def main() -> None:
           f"Интент верно: {ok_intent}/{n} ({ok_intent / n:.0%}). Все поля верно: {ok_full}/{n} ({ok_full / n:.0%}). "
           f"В среднем {per_phrase:.2f} с на фразу.")
     if args.nlu == "llm":
-        print(f"LLM: ответов модели {llm_answers}/{n}; ответов правил вместо модели {n - llm_answers}/{n}.")
+        print(f"LLM: ответов модели {llm_answers}/{n}; правила уверены, LLM не нужна: {rules_sure}/{n}; "
+              f"ответов правил вместо модели (сбой или страховка): {n - llm_answers - rules_sure}/{n}.")
     if args.nlu == "llm-only":
         print(f"LLM: ошибок запроса {llm_errors}/{n}.")
 

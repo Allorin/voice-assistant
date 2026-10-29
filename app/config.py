@@ -67,6 +67,8 @@ class Settings:
     embeddings_api_key: str
     embeddings_model: str
 
+    # LLM на каждую реплику, даже когда правила уверены (по умолчанию уверенные реплики разбирают правила)
+    llm_always: bool = False
     llm_provider: str = "openai"
     gigachat_credentials: str = field(default="", repr=False)
     gigachat_scope: str = "GIGACHAT_API_PERS"
@@ -149,6 +151,7 @@ def get_settings() -> Settings:
         embeddings_api_key=_env("EMBEDDINGS_API_KEY", "none"),
         embeddings_model=_env("EMBEDDINGS_MODEL"),
         # задан только ключ GigaChat — значит, работаем через GigaChat
+        llm_always=_env("LLM_ALWAYS").lower() in ("1", "true", "yes", "on"),
         llm_provider=_env("LLM_PROVIDER", "gigachat" if gigachat_key else "openai").lower(),
         gigachat_credentials=gigachat_key,
         gigachat_scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),

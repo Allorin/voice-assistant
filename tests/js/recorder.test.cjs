@@ -124,3 +124,20 @@ test("toPcm16 clamps and converts samples", () => {
   const { toPcm16 } = load().internals;
   assert.deepEqual(Array.from(toPcm16(new Float32Array([0, 1, -1, 3, -3]))), [0, 32767, -32768, 32767, -32768]);
 });
+
+test("level indicator: silence is 0, loud speech is 1, and it decays smoothly", async () => {
+  const { window, internals, feed } = load();
+  const { levelFromRms } = internals;
+  assert.equal(levelFromRms(0), 0);
+  assert.equal(levelFromRms(0.003), 0);
+  assert.equal(levelFromRms(0.5), 1);
+  assert.ok(levelFromRms(0.03) > 0.3 && levelFromRms(0.03) < 0.7);
+  const levels = [];
+  const rec = new window.VoiceRecorder({ onStop() {}, onLevel: (v) => levels.push(v) });
+  await rec.start();
+  feed(0.3, 2);
+  feed(0.004, 3);
+  assert.equal(levels[0], 1);
+  assert.ok(levels[2] < 1 && levels[2] > levels[4] && levels[4] > 0, "falls gradually after speech");
+  rec.stop();
+});

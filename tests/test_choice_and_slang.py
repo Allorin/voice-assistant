@@ -94,7 +94,7 @@ def test_command_word_removed_from_llm_title():
         def parse(self, text, ctx):
             return Command(intent=Intent.CREATE, title="Добавь почту dani+dsa@gmail.com", when="завтра")
 
-    cmd = HybridNLU(RuleNLU(), LLM()).parse("добавь почту dani+dsa@gmail.com на завтра", NLUContext(now=NOW))
+    cmd = HybridNLU(RuleNLU(), LLM(), always_llm=True).parse("добавь почту dani+dsa@gmail.com на завтра", NLUContext(now=NOW))
     assert cmd.title == "Почту dani+dsa@gmail.com"
 
 

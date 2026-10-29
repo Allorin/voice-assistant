@@ -33,18 +33,18 @@ def test_normalize_garbage_values():
 
 
 def test_llm_failure_falls_back_to_rules():
-    nlu = HybridNLU(RuleNLU(), FakeLLM(error=TimeoutError("timeout")))
+    nlu = HybridNLU(RuleNLU(), FakeLLM(error=TimeoutError("timeout")), always_llm=True)
     cmd = nlu.parse("Напомни мне завтра в 10 утра позвонить Ивану", ctx)
     assert cmd.source == "rules-fallback" and cmd.intent == Intent.CREATE and cmd.title == "Позвонить Ивану"
 
 
 def test_llm_result_is_used_and_completed_by_rules():
     llm = FakeLLM({"intent": "create", "item_type": "reminder", "title": "Позвонить Ивану", "when": None})
-    cmd = HybridNLU(RuleNLU(), llm).parse("Напомни мне завтра в 10 утра позвонить Ивану", ctx)
+    cmd = HybridNLU(RuleNLU(), llm, always_llm=True).parse("Напомни мне завтра в 10 утра позвонить Ивану", ctx)
     assert cmd.source == "llm" and cmd.item_type == ItemType.REMINDER
     assert cmd.when == "завтра в 10 утра"  # LLM потеряла время — правила дополнили
 
 
 def test_llm_unknown_but_rules_understand():
-    cmd = HybridNLU(RuleNLU(), FakeLLM({"intent": "unknown"})).parse("Что у меня сегодня?", ctx)
+    cmd = HybridNLU(RuleNLU(), FakeLLM({"intent": "unknown"}), always_llm=True).parse("Что у меня сегодня?", ctx)
     assert cmd.intent == Intent.LIST
