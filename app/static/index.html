@@ -9,10 +9,15 @@
   <link rel="icon" href="/static/icons/favicon-16.png" type="image/png" sizes="16x16">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.json">
-  <meta name="theme-color" content="#0e7c66">
+  <meta name="theme-color" content="#1a181b">
+  <script>
+    // тема до первой отрисовки, чтобы не мигала: тёмная по умолчанию, светлая или «как в системе» — из настроек
+    try { document.documentElement.dataset.theme = JSON.parse(localStorage.getItem("theme")) || "dark"; }
+    catch { document.documentElement.dataset.theme = "dark"; }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geologica:wght@400;500;600&family=Tiny5&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -73,6 +78,10 @@
     <aside class="agenda" id="agenda" aria-label="Ближайшие 7 дней">
       <header class="agenda-head">
         <h2>Ближайшие 7 дней</h2>
+        <button class="icon-btn" id="calendarOpen" type="button" aria-haspopup="dialog" title="Все записи по месяцам">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></svg>
+          Месяц
+        </button>
         <button class="icon-btn close-plan" id="planClose" type="button">Закрыть</button>
       </header>
       <div id="agendaList" class="agenda-list"></div>
@@ -96,6 +105,13 @@
       </label>
       <p class="setting-help" id="profileHelp">У каждого профиля свои задачи и встречи. Введите имя, чтобы переключиться или создать профиль.</p>
     </form>
+    <label class="setting-field" for="themeSelect">Оформление
+      <select id="themeSelect">
+        <option value="dark">Тёмное</option>
+        <option value="light">Светлое</option>
+        <option value="system">Как в системе</option>
+      </select>
+    </label>
     <label class="setting-field" id="sttField" for="sttMode" hidden>Распознавание речи
       <select id="sttMode">
         <option value="auto">Автоматически · браузер, при сбое — сервер</option>
@@ -118,6 +134,25 @@
     <p class="setting-help">Ассистент предложит добавить подробности и выбрать, за сколько напомнить. Можно ответить «пропустить» или «сохранить».</p>
     <button class="preview-btn" id="voicePreview" type="button">Прослушать пример</button>
     <p class="setting-help" id="voiceStatus" role="status">Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.</p>
+  </dialog>
+  <dialog class="month" id="monthDialog" aria-labelledby="monthTitle">
+    <header class="month-head">
+      <h2 id="monthTitle">Месяц</h2>
+      <button class="icon-btn" id="monthPrev" type="button" aria-label="Предыдущий месяц">‹</button>
+      <button class="icon-btn" id="monthNext" type="button" aria-label="Следующий месяц">›</button>
+      <button class="icon-btn today-btn" id="monthToday" type="button">Сегодня</button>
+      <span class="spacer"></span>
+      <button class="icon-btn" id="monthClose" type="button" aria-label="Закрыть календарь">✕</button>
+    </header>
+    <div class="month-body">
+      <div class="month-grid">
+        <div class="weekdays" aria-hidden="true">
+          <span>пн</span><span>вт</span><span>ср</span><span>чт</span><span>пт</span><span>сб</span><span>вс</span>
+        </div>
+        <div class="weeks" id="monthWeeks" role="group" aria-labelledby="monthTitle"></div>
+      </div>
+      <section class="month-day" id="monthDay" aria-live="polite"></section>
+    </div>
   </dialog>
   <dialog class="settings" id="calendarDialog" aria-labelledby="calendarTitle">
     <div class="settings-head">

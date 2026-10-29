@@ -18,7 +18,10 @@ const els = {
   rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
   detailsEnabled: $("detailsEnabled"), voicePreview: $("voicePreview"), voiceStatus: $("voiceStatus"),
   profileForm: $("profileForm"), profileName: $("profileName"), profileHelp: $("profileHelp"), icsDownload: $("icsDownload"),
-  sttField: $("sttField"), sttMode: $("sttMode"),
+  sttField: $("sttField"), sttMode: $("sttMode"), themeSelect: $("themeSelect"),
+  month: $("monthDialog"), monthOpen: $("calendarOpen"), monthTitle: $("monthTitle"), monthWeeks: $("monthWeeks"),
+  monthDay: $("monthDay"), monthPrev: $("monthPrev"), monthNext: $("monthNext"), monthToday: $("monthToday"),
+  monthClose: $("monthClose"),
   access: $("accessDialog"), accessForm: $("accessForm"), accessCode: $("accessCode"), accessHelp: $("accessHelp"),
 };
 
@@ -136,6 +139,7 @@ function renderItems(items, changed) {
 async function send(text, viaVoice = false) {
   text = text.trim();
   if (!text || state.busy) return;
+  if (openMonthByCommand(text)) return;
   state.busy = true;
   els.input.value = "";
   addMessage("user", text);
@@ -151,12 +155,13 @@ async function send(text, viaVoice = false) {
     const shown = showItems.length
       ? data.reply.split("\n").filter((l) => l.trim() && !/^\s*•/.test(l) && !/^(Ранее|Дальше):$/.test(l.trim())).join("\n")
       : data.reply;
-    addMessage("assistant", shown, { items: showItems, changed: data.changed, clarify: !!data.awaiting });
+    const msg = addMessage("assistant", shown, { items: showItems, changed: data.changed, clarify: !!data.awaiting });
+    offerMonth(msg, data);
     // если человек говорил голосом и ассистент задал вопрос — сразу слушаем ответ
     const listenAfter = viaVoice && data.awaiting && canListen();
     say(data.speech, listenAfter ? () => startListening() : null, data.speech_parts);
     if (data.changed.length || ["create", "update", "delete", "complete", "reopen", "undo"].includes(data.intent)) {
-      loadAgenda(data.changed);
+      refreshPlan(data.changed);
     }
   } catch (err) {
     typing.remove();
@@ -522,7 +527,7 @@ function agendaItem(it, flash) {
     const on = it.recurrence ? `?on=${it.due_at.slice(0, 10)}` : "";
     try {
       await api(`/api/items/${it.id}/${action}${on}`, { method: "POST" });
-      loadAgenda([it.recurrence ? `${it.id}@${it.due_at}` : it.id]);
+      refreshPlan([it.recurrence ? `${it.id}@${it.due_at}` : it.id]);
     }
     catch (err) { check.checked = !check.checked; showToast(err.message); }
   });
@@ -556,7 +561,7 @@ function agendaItem(it, flash) {
   del.setAttribute("aria-label", `Удалить: ${it.title}`);
   del.addEventListener("click", async () => {
     if (it.recurrence) { showDeleteChoice(li, it, del); return; }
-    try { await api(`/api/items/${it.id}`, { method: "DELETE" }); loadAgenda(); }
+    try { await api(`/api/items/${it.id}`, { method: "DELETE" }); refreshPlan(); }
     catch (err) { showToast(err.message); }
   });
   li.append(check, time, title, del);
@@ -588,7 +593,7 @@ function showDeleteChoice(li, it, del) {
     return b;
   };
   const remove = async (query) => {
-    try { await api(`/api/items/${it.id}${query}`, { method: "DELETE" }); loadAgenda(); }
+    try { await api(`/api/items/${it.id}${query}`, { method: "DELETE" }); refreshPlan(); }
     catch (err) { showToast(err.message); }
   };
   const close = () => { box.remove(); del.hidden = false; li.classList.remove("choosing"); };
@@ -658,6 +663,207 @@ async function copyCalendarLink() {
     els.calendarCopy.textContent = "Ctrl+C";
   }
   setTimeout(() => (els.calendarCopy.textContent = "Скопировать"), 2000);
+}
+
+/* ---------------------------------------------------------------- месяц */
+
+const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь",
+  "Ноябрь", "Декабрь"];
+const month = { first: null, selected: null, byDay: new Map() };
+
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayIso = () => (state.status && state.status.now ? state.status.now.slice(0, 10) : isoDay(new Date()));
+const plural = (n, one, few, many) => {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+};
+
+// План на неделю и открытый календарь показывают одно и то же — после изменений обновляем оба
+function refreshPlan(changed = []) {
+  loadAgenda(changed);
+  if (els.month.open) loadMonth();
+}
+
+function openMonth(day) {
+  const key = day || todayIso();
+  const d = new Date(key + "T00:00:00");
+  month.first = new Date(d.getFullYear(), d.getMonth(), 1);
+  month.selected = key;
+  if (!els.month.open) els.month.showModal();
+  loadMonth().then(() => focusDay(key));
+}
+
+function shiftMonth(delta) {
+  const f = month.first;
+  const next = new Date(f.getFullYear(), f.getMonth() + delta, 1);
+  const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  const day = Math.min(Number(month.selected.slice(8, 10)), lastDay);
+  month.first = next;
+  month.selected = isoDay(new Date(next.getFullYear(), next.getMonth(), day));
+  loadMonth();
+}
+
+async function loadMonth() {
+  const first = month.first;
+  const start = new Date(first.getFullYear(), first.getMonth(), 1 - ((first.getDay() + 6) % 7));  // с понедельника
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 42);
+  els.monthTitle.textContent = `${MONTH_NAMES[first.getMonth()]} ${first.getFullYear()}`;
+  let items = [];
+  try { items = await api(`/api/items/range?start=${isoDay(start)}&end=${isoDay(end)}`); }
+  catch (err) { showToast(err.message); }
+  month.byDay = new Map();
+  for (const it of items) {
+    const key = it.due_at.slice(0, 10);
+    if (!month.byDay.has(key)) month.byDay.set(key, []);
+    month.byDay.get(key).push(it);
+  }
+  renderMonth(start);
+  renderMonthDay();
+}
+
+function renderMonth(start) {
+  const today = todayIso();
+  els.monthWeeks.textContent = "";
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    const key = isoDay(d);
+    const dayItems = month.byDay.get(key) || [];
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "cell" + (d.getMonth() !== month.first.getMonth() ? " other" : "") + (key === today ? " today" : "");
+    cell.dataset.date = key;
+    cell.tabIndex = key === month.selected ? 0 : -1;
+    cell.setAttribute("aria-selected", String(key === month.selected));
+    const n = dayItems.length;
+    cell.setAttribute("aria-label", `${dayTitle(key, today)}: ${n ? `${n} ${plural(n, "запись", "записи", "записей")}` : "записей нет"}`);
+    const num = document.createElement("span");
+    num.className = "num";
+    num.textContent = d.getDate();
+    cell.appendChild(num);
+    for (const it of dayItems.slice(0, 3)) {
+      const chip = document.createElement("span");
+      chip.className = `chip ${it.type}` + (it.status === "done" ? " done" : "");
+      if (it.has_time) {
+        const time = document.createElement("b");
+        time.textContent = it.due_at.slice(11, 16);
+        chip.appendChild(time);
+      }
+      chip.append(it.title);
+      cell.appendChild(chip);
+    }
+    if (n > 3) {
+      const more = document.createElement("span");
+      more.className = "more";
+      more.textContent = `ещё ${n - 3}`;
+      cell.appendChild(more);
+    }
+    if (n) {  // на телефоне вместо названий — точки по типам записей
+      const dots = document.createElement("span");
+      dots.className = "dots";
+      for (const it of dayItems.slice(0, 4)) {
+        const dot = document.createElement("i");
+        dot.className = it.type;
+        dots.appendChild(dot);
+      }
+      cell.appendChild(dots);
+    }
+    cell.addEventListener("click", () => selectDay(key));
+    els.monthWeeks.appendChild(cell);
+  }
+}
+
+function selectDay(key, focus = false) {
+  const d = new Date(key + "T00:00:00");
+  if (d.getMonth() !== month.first.getMonth() || d.getFullYear() !== month.first.getFullYear()) {
+    month.first = new Date(d.getFullYear(), d.getMonth(), 1);
+    month.selected = key;
+    loadMonth().then(() => focus && focusDay(key));
+    return;
+  }
+  month.selected = key;
+  for (const cell of els.monthWeeks.children) {
+    const on = cell.dataset.date === key;
+    cell.setAttribute("aria-selected", String(on));
+    cell.tabIndex = on ? 0 : -1;
+  }
+  renderMonthDay();
+  if (focus) focusDay(key);
+}
+
+function focusDay(key) {
+  const cell = els.monthWeeks.querySelector(`[data-date="${key}"]`);
+  if (cell) cell.focus();
+}
+
+function renderMonthDay() {
+  const key = month.selected;
+  const items = month.byDay.get(key) || [];
+  els.monthDay.textContent = "";
+  const h = document.createElement("h3");
+  h.textContent = dayTitle(key, todayIso());
+  els.monthDay.appendChild(h);
+  if (!items.length) {
+    const d = new Date(key + "T00:00:00");
+    const p = document.createElement("p");
+    p.className = "agenda-empty";
+    p.textContent = `Записей нет. Скажите, например: «Добавь встречу с командой ${d.getDate()} ${MONTHS[d.getMonth()]} в 15:00».`;
+    els.monthDay.appendChild(p);
+    return;
+  }
+  const ul = document.createElement("ul");
+  ul.className = "items";
+  for (const it of items) ul.appendChild(agendaItem(it, false));
+  els.monthDay.appendChild(ul);
+}
+
+// стрелки — по дням и неделям, PageUp/PageDown — по месяцам
+function monthKeys(e) {
+  const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+  if (e.key in steps) {
+    e.preventDefault();
+    const d = new Date(month.selected + "T00:00:00");
+    d.setDate(d.getDate() + steps[e.key]);
+    selectDay(isoDay(d), true);
+  } else if (e.key === "PageUp" || e.key === "PageDown") {
+    e.preventDefault();
+    shiftMonth(e.key === "PageUp" ? -1 : 1);
+  }
+}
+
+// «Открой календарь», «покажи календарь на ноябрь» — открываем месяц, не спрашивая сервер
+const MONTH_STEMS = ["январ", "феврал", "март", "апрел", "ма[йя]", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"];
+function openMonthByCommand(text) {
+  if (!/^(?:открой|открыть|покажи|показать)\s+(?:мой\s+|весь\s+)?календар/i.test(text)) return false;
+  const rest = text.replace(/^\S+\s+\S+/, "");  // без «покажи календарь»
+  const idx = MONTH_STEMS.findIndex((stem) => new RegExp(`(?:^|[^а-яё])${stem}`, "i").test(rest));
+  const now = new Date(todayIso() + "T00:00:00");
+  let target = null;
+  if (idx >= 0) {
+    const year = idx < now.getMonth() ? now.getFullYear() + 1 : now.getFullYear();
+    target = isoDay(new Date(year, idx, 1));
+  }
+  els.input.value = "";
+  addMessage("user", text);
+  const label = idx >= 0 ? ` на ${MONTH_NAMES[idx].toLowerCase()}` : "";
+  addMessage("assistant", `Открываю календарь${label}.`);
+  say(`Открываю календарь${label}.`);
+  openMonth(target);
+  return true;
+}
+
+// После списка за несколько дней — ссылка «Открыть в календаре»
+function offerMonth(msg, data) {
+  if (data.intent !== "list" || !data.items || !data.items.length) return;
+  const days = new Set(data.items.filter((it) => it.due_at).map((it) => it.due_at.slice(0, 10)));
+  if (days.size < 2) return;
+  const first = [...days].sort()[0];
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "open-month";
+  btn.textContent = "Открыть в календаре";
+  btn.addEventListener("click", () => openMonth(first));
+  msg.appendChild(document.createElement("br"));
+  msg.appendChild(btn);
 }
 
 /* ---------------------------------------------------------------- профили */
@@ -752,6 +958,19 @@ els.voicePreview.addEventListener("click", async () => {
 document.addEventListener("pointerdown", () => audio.unlock(), { passive: true });
 document.addEventListener("keydown", () => audio.unlock());
 els.icsCopy.addEventListener("click", openCalendarDialog);
+els.monthOpen.addEventListener("click", () => openMonth());
+els.monthPrev.addEventListener("click", () => shiftMonth(-1));
+els.monthNext.addEventListener("click", () => shiftMonth(1));
+els.monthToday.addEventListener("click", () => openMonth());
+els.monthClose.addEventListener("click", () => els.month.close());
+els.monthWeeks.addEventListener("keydown", monthKeys);
+els.month.addEventListener("click", (e) => { if (e.target === els.month) els.month.close(); });  // щелчок по фону
+// Оформление: тёмное по умолчанию, светлое или как в системе — запоминается в браузере
+els.themeSelect.value = document.documentElement.dataset.theme || "dark";
+els.themeSelect.addEventListener("change", () => {
+  document.documentElement.dataset.theme = els.themeSelect.value;
+  store.set("theme", els.themeSelect.value);
+});
 els.calendarCopy.addEventListener("click", copyCalendarLink);
 els.calendarClose.addEventListener("click", () => els.calendar.close());
 els.suggestions.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });

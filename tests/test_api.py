@@ -57,3 +57,16 @@ def test_icons_are_served():
     manifest = c.get("/static/manifest.json").json()
     for icon in manifest["icons"]:
         assert c.get(icon["src"]).status_code == 200
+
+
+def test_items_range_for_month_calendar():
+    c = client()
+    c.post("/api/chat", json={"text": "добавь встречу с Олегом 5 ноября в 12", "session_id": "r"})
+    c.post("/api/chat", json={"text": "каждый понедельник в 10 планёрка", "session_id": "r"})
+    items = c.get("/api/items/range", params={"start": "2026-11-01", "end": "2026-12-01"}).json()
+    titles = [(i["title"], i["due_at"][:10]) for i in items]
+    assert ("Встреча с Олегом", "2026-11-05") in titles
+    assert [d for t, d in titles if t == "Планёрка"] == ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23",
+                                                         "2026-11-30"]  # серия развёрнута по дням
+    assert c.get("/api/items/range", params={"start": "2026-11-01", "end": "2027-02-01"}).status_code == 400
+    assert c.get("/api/items/range", params={"start": "2026-11-02", "end": "2026-11-01"}).status_code == 400

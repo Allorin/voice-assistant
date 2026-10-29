@@ -187,6 +187,15 @@ def upcoming(days: int = 7, x_user_id: str | None = Header(default=None)):
     return [item_out(i) for i in c().service.upcoming(_user(x_user_id), max(1, min(days, 60)))]
 
 
+@app.get("/api/items/range", response_model=list[ItemOut])
+def items_range(start: date, end: date, x_user_id: str | None = Header(default=None)):
+    """Записи за период [start, end) — для календаря на месяц (повторения развёрнуты по дням)."""
+    if end <= start or (end - start).days > 62:
+        raise HTTPException(400, "Период должен быть от 1 до 62 дней")
+    first, last = datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.min.time())
+    return [item_out(i) for i in c().service.list_period(_user(x_user_id), first, last)]
+
+
 @app.get("/api/items/undated", response_model=list[ItemOut])
 def undated(x_user_id: str | None = Header(default=None)):
     """Задачи без срока: в плане они идут отдельным блоком под ближайшими днями."""
