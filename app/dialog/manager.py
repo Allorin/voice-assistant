@@ -10,14 +10,15 @@ import time as _time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
+from app import holidays as hol
 from app.dialog import phrases as ph
 from app.dialog.session import Draft, Pending, Session, SessionStore
 from app.models import TYPE_FORMS, Item, ItemStatus, ItemType, NewItem
 from app.nlu.rules import SHIFT_RX as _SHIFT
 from app.nlu.rules import RuleNLU, clean_title, has_create_trigger
 from app.nlu.schema import Command, Intent, NLUContext
-from app.search.text import lemma
 from app.search.engine import Hit
+from app.search.text import lemma, lemmas
 from app.services.items import ItemService, expand_types
 from app.timeparse.repeat import parse_repeat
 from app.timeparse.ru import TimeInfo, creation_moment, parse, tokenize
@@ -52,6 +53,9 @@ _WEEKDAY_ONLY = re.compile(r"^(?:в\s+|во\s+|на\s+)?(понедельник|
 _WEEKDAY_INDEX = {"пон": 0, "вто": 1, "сре": 2, "чет": 3, "пят": 4, "суб": 5, "вос": 6}
 # ответ на «Поставить на пятницу или на сегодня?» в пользу обсуждаемого дня
 _FOCUS_ANSWER = re.compile(r"\b(?:туда|тот|той|тогда|этот|эту|перв\w*)\b", re.IGNORECASE)
+# «какие праздники в ноябре», «когда ближайший праздник», «4 ноября выходной?»
+_HOLIDAY_WORDS = {"праздник", "праздничный", "выходной", "нерабочий", "рабочий"}
+_HOLIDAY_FILLER = {"следующий", "ближайший", "день", "какой", "государственный", "официальный", "дата"}
 FOCUS_TURNS = 4          # обсуждаемый день помнится несколько реплик…
 FOCUS_SECONDS = 10 * 60  # …и не дольше 10 минут
 
@@ -210,6 +214,87 @@ class DialogManager:
         s.focus_day, s.focus_period = day, period
         s.focus_turn, s.focus_at = s.turn, _time.monotonic()
 
+    # ================================================================ праздники
+
+    @staticmethod
+    def _holiday_question(cmd: Command, text: str) -> bool:
+        """Вопрос о праздниках, а не о записях: «какие праздники в ноябре», «4 ноября выходной?»,
+        «праздники в мае». «Найди задачу про праздник» — это поиск записей."""
+        if re.search(r"(?:^|\s)(?:про|о|об|насч[её]т)\s", text, re.IGNORECASE):
+            return False
+        if cmd.intent in (Intent.LIST, Intent.SEARCH) and cmd.item_type is None:
+            words = set(lemmas(cmd.query or ""))
+        elif cmd.intent == Intent.CREATE and not has_create_trigger(text):  # «праздники в мае» без глагола
+            words = set(lemmas(cmd.title or ""))
+            if words & _HOLIDAY_WORDS and words <= _HOLIDAY_WORDS | _HOLIDAY_FILLER:
+                cmd.period, cmd.query = cmd.when, cmd.title
+        else:
+            return False
+        return bool(words & _HOLIDAY_WORDS) and words <= _HOLIDAY_WORDS | _HOLIDAY_FILLER
+
+    def _holiday_day(self, d: date) -> str:
+        year = f" {d.year}" if d.year != self.service.now().year else ""
+        return f"{d.day} {ph.MONTHS_GEN[d.month - 1]}{year}"
+
+    def _holidays(self, s: Session, cmd: Command, now: datetime) -> Reply:
+        """Государственные праздники и нерабочие дни (app/holidays.py), а не записи пользователя."""
+        today = now.date()
+        info = parse(cmd.period or "", now, "past" if cmd.tense == "past" else "future")  # «в мае» — ближайший май
+        rng = info.query_range()
+        only_days_off = "праздник" not in set(lemmas(cmd.query or ""))
+        if rng is not None and rng[1] - rng[0] <= timedelta(days=1):  # «4 ноября выходной?»
+            d = rng[0].date()
+            self._set_focus(s, day=d)
+            h, label = hol.holiday_on(d), ph.cap(ph.day_phrase(d, today))
+            if h is not None and h.off:
+                text = f"{label} — нерабочий день: {h.name}."
+            elif h is not None:  # рабочая суббота из-за переноса
+                text = f"{label} — {h.name[0].lower()}{h.name[1:]}."
+            elif d.weekday() >= 5:
+                text = f"{label} — выходной."
+            else:
+                text = f"{label} — рабочий день, праздника нет."
+            return Reply(text, intent="list")
+        if rng is None:
+            start, end = today, today + timedelta(days=366)
+        else:
+            start, end = rng[0].date(), rng[1].date()
+        if cmd.ask_when or rng is None and only_days_off:
+            # «когда ближайший праздник», «когда следующий выходной» (выходной — и обычная суббота тоже)
+            if only_days_off:
+                d = next(d for d in (today + timedelta(days=i) for i in range(1, 30)) if hol.is_day_off(d))
+                h = hol.holiday_on(d)
+                text = f"Ближайший выходной — {ph.day_phrase(d, today)}" + (f": {h.name}." if h else ".")
+            else:
+                h = next(h for h in hol.between(today + timedelta(days=1), today + timedelta(days=400))
+                         if h.kind == hol.HOLIDAY)
+                text = f"Ближайший праздник — {ph.day_phrase(h.day, today)}: {h.name}."
+                self._set_focus(s, day=h.day)
+            return Reply(text, intent="list")
+        found = [h for h in hol.between(start, end) if h.off]
+        label = ph.period_label(datetime.combine(start, time()), datetime.combine(end, time()), today) \
+            if rng is not None else "В ближайший год"
+        if not found:
+            return Reply(f"{label} государственных праздников и перенесённых выходных нет.", intent="list")
+        lines = [f"{label} — праздники и нерабочие дни:"]
+        for first, last, name in hol.runs(found)[:16]:
+            days = self._holiday_day(first) if first == last else (
+                f"{first.day}–{self._holiday_day(last)}" if first.month == last.month
+                else f"{self._holiday_day(first)} – {self._holiday_day(last)}")
+            lines.append(f"• {days} — {name}")
+        if rng is not None:
+            self._set_focus(s, period=(rng[0], rng[1]))
+        speech = lines[0].replace(" — праздники и нерабочие дни:", ": ") + "; ".join(l[2:] for l in lines[1:4]) + "."
+        return Reply("\n".join(lines), speech, intent="list")
+
+    def _holiday_note(self, start: datetime, end: datetime) -> str:
+        """Строка о праздниках в периоде списка: «Праздник: 4 ноября — День народного единства»."""
+        found = [h for h in hol.between(start.date(), max(end.date(), start.date() + timedelta(days=1)))
+                 if h.kind == hol.HOLIDAY]
+        names = [f"{self._holiday_day(a) if a == b else f'{a.day}–{self._holiday_day(b)}'} — {n}"
+                 for a, b, n in hol.runs(found)[:3]]
+        return ("Праздник: " if len(names) == 1 else "Праздники: ") + "; ".join(names) + "." if names else ""
+
     # ================================================================ отмена
 
     @staticmethod
@@ -242,6 +327,8 @@ class DialogManager:
     def _dispatch(self, s: Session, user: str, cmd: Command, text: str, now: datetime, ref: str | None = None) -> Reply:
         if cmd.intent == Intent.UNDO:
             return self._undo(s, user, now)
+        if self._holiday_question(cmd, text):
+            return self._holidays(s, cmd, now)
         if cmd.intent == Intent.CREATE:
             return self._create(s, user, cmd, now, ref)
         if cmd.intent == Intent.LIST:
@@ -784,8 +871,9 @@ class DialogManager:
                 text = f"{label} {TYPE_FORMS[t][2]} нет."
             else:
                 text = f"{label} ничего не запланировано."
+            note = "" if (cmd.query or cmd.status) else self._holiday_note(rng[0], rng[1])
             s.last_ids = []
-            return Reply(text, intent="list")
+            return Reply(f"{text} {note}".strip(), intent="list")
 
         multi_day = (rng[1] - rng[0]) > timedelta(days=1) or rng[0].date() != (rng[1] - timedelta(seconds=1)).date()
         n = len(items)
@@ -805,6 +893,10 @@ class DialogManager:
                   else f"{label} у вас {ph.count_phrase(n, t, spoken=True)}. {ph.cap(spoken)}.")
         if n > 3:
             speech += f" И ещё {n - 3} — на экране."
+        note = "" if (cmd.query or cmd.status) else self._holiday_note(rng[0], rng[1])
+        if note:  # «Праздник: 4 ноября — День народного единства.»
+            lines.append(f"\n{note}")
+            speech += f" {note}"
         self._remember(s, items[:10])
         return Reply("\n".join(lines), speech, items=items, intent="list")
 

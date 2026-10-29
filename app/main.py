@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from app import holidays as hol
 from app.access import calendar_token
 from app.config import BASE_DIR, get_settings
 from app.container import USER_ID_RX, Container, build
@@ -194,6 +195,14 @@ def items_range(start: date, end: date, x_user_id: str | None = Header(default=N
         raise HTTPException(400, "Период должен быть от 1 до 62 дней")
     first, last = datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.min.time())
     return [item_out(i) for i in c().service.list_period(_user(x_user_id), first, last)]
+
+
+@app.get("/api/holidays")
+def holidays(start: date, end: date):
+    """Праздники РФ, перенесённые выходные и рабочие субботы за период [start, end) — для календаря и плана."""
+    if end <= start or (end - start).days > 400:
+        raise HTTPException(400, "Период должен быть от 1 до 400 дней")
+    return [{"date": h.day.isoformat(), "name": h.name, "kind": h.kind} for h in hol.between(start, end)]
 
 
 @app.get("/api/items/undated", response_model=list[ItemOut])

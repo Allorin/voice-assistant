@@ -19,6 +19,7 @@
   --task: #b48cff;
   --reminder: #ffb45e;
   --danger: #ff6b81;
+  --holiday: #ff7a93;      /* «красные дни» календаря */
   --flash: #4a2a7a;
   --glow: 0 0 0 6px var(--surface), 0 0 28px #7d02fc80;
   --backdrop: #0d0b0fcc;
@@ -45,6 +46,7 @@
   --task: #7d02fc;
   --reminder: #b0600a;
   --danger: #c0283f;
+  --holiday: #c4183c;
   --flash: #e3d2ff;
   --glow: 0 0 0 6px var(--surface), 0 6px 22px #7d02fc55;
   --backdrop: #1a181b99;
@@ -55,7 +57,7 @@
   :root[data-theme="system"] {
     --paper: #f3eff8; --surface: #ffffff; --raised: #ede7f6; --ink: #1a181b; --muted: #625c6a; --line: #ddd4ea;
     --accent-text: #6400cc; --accent-soft: #ece0ff; --accent-pale: #5104a1; --user-bg: #2d2b2e;
-    --meeting: #2e5bd0; --task: #7d02fc; --reminder: #b0600a; --danger: #c0283f; --flash: #e3d2ff;
+    --meeting: #2e5bd0; --task: #7d02fc; --reminder: #b0600a; --danger: #c0283f; --holiday: #c4183c; --flash: #e3d2ff;
     --glow: 0 0 0 6px var(--surface), 0 6px 22px #7d02fc55; --backdrop: #1a181b99;
     color-scheme: light;
   }
@@ -402,6 +404,13 @@ h2 { margin: 0 0 6px; font: 400 22px/1.2 var(--display); }
 .chip.done { color: var(--muted); text-decoration: line-through; }
 .chip b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 4px; }
 .more { font-size: 12px; color: var(--accent-text); }
+.cell.off .num { color: var(--accent-pale); }
+.cell.holiday .num, .cell .hol { color: var(--holiday); }
+.cell .hol { font-size: 11px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell.workday .hol { color: var(--muted); }
+.holiday-note { margin: 0 0 8px; font-size: 13px; color: var(--holiday); }
+.holiday-note.workday { color: var(--muted); }
+.cell.today.off .num, .cell.today.holiday .num { color: var(--accent-ink); }
 .dots { display: none; gap: 3px; }
 .dots i { width: 6px; height: 6px; background: var(--task); }
 .dots i.meeting { background: var(--meeting); }
@@ -442,7 +451,7 @@ h2 { margin: 0 0 6px; font: 400 22px/1.2 var(--display); }
   .month-grid { padding: 8px; }
   .weeks { grid-auto-rows: 52px; }
   .cell { align-items: center; padding: 4px 2px; }
-  .cell .chip, .cell .more { display: none; }
+  .cell .chip, .cell .more, .cell .hol { display: none; }
   .cell .dots { display: flex; }
   .cell.today .num { align-self: center; }
   .month-day { border-left: none; border-top: 1px solid var(--line); padding: 14px 12px; overflow: visible; }

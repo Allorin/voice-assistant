@@ -460,11 +460,15 @@ function dayTitle(dateStr, todayStr) {
 }
 
 async function loadAgenda(changed = []) {
-  let items, undated;
-  try {
-    [items, undated] = await Promise.all([api("/api/items/upcoming?days=7"), api("/api/items/undated")]);
-  } catch { return; }
+  let items, undated, holidays;
   const today = (state.status && state.status.now ? state.status.now : new Date().toISOString()).slice(0, 10);
+  const weekEnd = isoDay(new Date(new Date(today + "T00:00:00").getTime() + 7 * 86400000));
+  try {
+    [items, undated, holidays] = await Promise.all([api("/api/items/upcoming?days=7"), api("/api/items/undated"),
+      api(`/api/holidays?start=${today}&end=${weekEnd}`).catch(() => [])]);
+  } catch { return; }
+  // праздники видны в плане, даже если записей в этот день нет
+  const festive = new Map(holidays.filter((h) => h.kind !== "workday").map((h) => [h.date, h]));
   els.agendaList.textContent = "";
   if (!items.length) {
     const p = document.createElement("p");
@@ -478,12 +482,20 @@ async function loadAgenda(changed = []) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(it);
   }
-  for (const [day, dayItems] of groups) {
+  for (const day of festive.keys()) if (!groups.has(day)) groups.set(day, []);
+  for (const [day, dayItems] of [...groups].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const sec = document.createElement("section");
     sec.className = "day" + (day === today ? " today" : "");
     const h = document.createElement("h3");
     h.textContent = dayTitle(day, today);
     sec.appendChild(h);
+    const hol = festive.get(day);
+    if (hol) {
+      const tag = document.createElement("p");
+      tag.className = "holiday-note";
+      tag.textContent = hol.kind === "holiday" ? hol.name : `${hol.name}`;
+      sec.appendChild(tag);
+    }
     const ul = document.createElement("ul");
     ul.className = "items";
     // у серии подсвечиваем только то повторение, которое меняли (ключ «id@дата»)
@@ -669,7 +681,13 @@ async function copyCalendarLink() {
 
 const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь",
   "Ноябрь", "Декабрь"];
-const month = { first: null, selected: null, byDay: new Map() };
+const month = { first: null, selected: null, byDay: new Map(), holidays: new Map() };
+
+// Подпись дня в календаре: праздник — его название, перенесённый выходной — «выходной», рабочая суббота — «рабочий»
+function holidayLabel(h) {
+  if (!h) return "";
+  return h.kind === "holiday" ? h.name : h.kind === "day_off" ? "выходной" : "рабочий день";
+}
 
 const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const todayIso = () => (state.status && state.status.now ? state.status.now.slice(0, 10) : isoDay(new Date()));
@@ -708,9 +726,12 @@ async function loadMonth() {
   const start = new Date(first.getFullYear(), first.getMonth(), 1 - ((first.getDay() + 6) % 7));  // с понедельника
   const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 42);
   els.monthTitle.textContent = `${MONTH_NAMES[first.getMonth()]} ${first.getFullYear()}`;
-  let items = [];
-  try { items = await api(`/api/items/range?start=${isoDay(start)}&end=${isoDay(end)}`); }
-  catch (err) { showToast(err.message); }
+  let items = [], holidays = [];
+  try {
+    [items, holidays] = await Promise.all([api(`/api/items/range?start=${isoDay(start)}&end=${isoDay(end)}`),
+      api(`/api/holidays?start=${isoDay(start)}&end=${isoDay(end)}`)]);
+  } catch (err) { showToast(err.message); }
+  month.holidays = new Map(holidays.map((h) => [h.date, h]));
   month.byDay = new Map();
   for (const it of items) {
     const key = it.due_at.slice(0, 10);
@@ -728,18 +749,29 @@ function renderMonth(start) {
     const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
     const key = isoDay(d);
     const dayItems = month.byDay.get(key) || [];
+    const hol = month.holidays.get(key);
+    const off = hol ? hol.kind !== "workday" : d.getDay() === 0 || d.getDay() === 6;
     const cell = document.createElement("button");
     cell.type = "button";
-    cell.className = "cell" + (d.getMonth() !== month.first.getMonth() ? " other" : "") + (key === today ? " today" : "");
+    cell.className = "cell" + (d.getMonth() !== month.first.getMonth() ? " other" : "") + (key === today ? " today" : "")
+      + (off ? " off" : "") + (hol && hol.kind !== "workday" ? " holiday" : "") + (hol && hol.kind === "workday" ? " workday" : "");
     cell.dataset.date = key;
     cell.tabIndex = key === month.selected ? 0 : -1;
     cell.setAttribute("aria-selected", String(key === month.selected));
     const n = dayItems.length;
-    cell.setAttribute("aria-label", `${dayTitle(key, today)}: ${n ? `${n} ${plural(n, "запись", "записи", "записей")}` : "записей нет"}`);
+    cell.setAttribute("aria-label", `${dayTitle(key, today)}${hol ? `, ${hol.name}` : ""}: `
+      + (n ? `${n} ${plural(n, "запись", "записи", "записей")}` : "записей нет"));
     const num = document.createElement("span");
     num.className = "num";
     num.textContent = d.getDate();
     cell.appendChild(num);
+    if (hol) {
+      const label = document.createElement("span");
+      label.className = "hol";
+      label.textContent = holidayLabel(hol);
+      label.title = hol.name;
+      cell.appendChild(label);
+    }
     for (const it of dayItems.slice(0, 3)) {
       const chip = document.createElement("span");
       chip.className = `chip ${it.type}` + (it.status === "done" ? " done" : "");
@@ -802,6 +834,13 @@ function renderMonthDay() {
   const h = document.createElement("h3");
   h.textContent = dayTitle(key, todayIso());
   els.monthDay.appendChild(h);
+  const hol = month.holidays.get(key);
+  if (hol) {
+    const note = document.createElement("p");
+    note.className = "holiday-note" + (hol.kind === "workday" ? " workday" : "");
+    note.textContent = hol.kind === "holiday" ? `${hol.name} — нерабочий день` : hol.name;
+    els.monthDay.appendChild(note);
+  }
   if (!items.length) {
     const d = new Date(key + "T00:00:00");
     const p = document.createElement("p");
