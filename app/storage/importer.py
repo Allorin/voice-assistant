@@ -2,6 +2,7 @@
 
 В CSV нет типа записи, поэтому он определяется по первому слову текста:
 «Встреча / Созвон / Демо / Провести / Обсудить» — встреча, «Напомнить» — напоминание, остальное — задача.
+Падежи в названиях исправляются («Позвонить Сергеем» → «Позвонить Сергею»), см. app/grammar.py.
 """
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
+from app.grammar import fix_cases
 from app.models import DEFAULT_MEETING_MINUTES, ItemType, NewItem
 from app.storage.repository import ItemRepository
 
@@ -30,7 +32,7 @@ def read_csv(path: str | Path) -> list[NewItem]:
     items: list[NewItem] = []
     with open(path, encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
-            text = (row.get("text") or "").strip()
+            text = fix_cases((row.get("text") or "").strip())
             if not text:
                 continue
             date_s = (row.get("date") or "").strip()

@@ -18,7 +18,8 @@ const els = {
   rateValue: $("rateValue"), volumeValue: $("volumeValue"), bellEnabled: $("bellEnabled"),
   detailsEnabled: $("detailsEnabled"), voicePreview: $("voicePreview"), voiceStatus: $("voiceStatus"),
   profileForm: $("profileForm"), profileName: $("profileName"), profileHelp: $("profileHelp"), icsDownload: $("icsDownload"),
-  sttField: $("sttField"), sttMode: $("sttMode"), themeSelect: $("themeSelect"),
+  sttField: $("sttField"), sttMode: $("sttMode"), sttHelp: $("sttHelp"), techInfo: $("techInfo"),
+  themeSelect: $("themeSelect"),
   month: $("monthDialog"), monthOpen: $("calendarOpen"), monthTitle: $("monthTitle"), monthWeeks: $("monthWeeks"),
   monthDay: $("monthDay"), monthPrev: $("monthPrev"), monthNext: $("monthNext"), monthToday: $("monthToday"),
   monthClose: $("monthClose"),
@@ -186,30 +187,39 @@ const audio = new PlannerAudio({ getSettings: () => state.audioSettings, isEnabl
     },
   },
 });
-const audioHelp = "Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.";
+const audioHelp = "Настройки запоминаются на этом устройстве. Чтобы сработали напоминания, держите страницу открытой.";
+
+function optionGroup(label, options) {
+  const group = document.createElement("optgroup");
+  group.label = label;
+  for (const option of options) group.append(option);
+  return group;
+}
 
 function updateVoices() {
   const voices = audio.voices();
   const server = !!(state.status && state.status.tts_server);
   els.voiceSelect.textContent = "";
-  els.voiceSelect.add(new Option("Автоматически · русский голос", ""));
-  for (const voice of voices) {
-    els.voiceSelect.add(new Option(`${voice.name} · ${voice.lang}`, voice.voiceURI));
+  els.voiceSelect.add(new Option("Автоматически", ""));
+  if (voices.length) {
+    els.voiceSelect.append(optionGroup("Голоса этого устройства", voices.map((v) => new Option(v.name, v.voiceURI))));
   }
-  if (server) els.voiceSelect.add(new Option("Ирина · голос сервера", PlannerAudio.SERVER_VOICE));
+  if (server) els.voiceSelect.append(optionGroup("Голос ассистента", [new Option("Ирина", PlannerAudio.SERVER_VOICE)]));
   const options = [...els.voiceSelect.options].map((o) => o.value);
   if (options.includes(state.audioSettings.voice)) els.voiceSelect.value = state.audioSettings.voice;
   els.voiceSelect.disabled = options.length < 2;
   const russian = audio.hasRussianVoice();
-  if (server && !russian && !audio.synth) els.voiceStatus.textContent = "В этом браузере нет синтеза речи — ответы озвучивает сервер.";
-  else if (server && !russian && audio.synth.getVoices().length) els.voiceStatus.textContent = "В браузере нет русского голоса — ответы озвучивает сервер.";
-  else if (!audio.synth) els.voiceStatus.textContent = "В этом браузере нет синтеза речи. Будут доступны текстовые напоминания и колокольчик.";
+  const irina = "ответы читает голос ассистента «Ирина».";
+  if (server && !russian && !audio.synth) els.voiceStatus.textContent = `На этом устройстве нет озвучки — ${irina}`;
+  else if (server && !russian && audio.synth.getVoices().length) els.voiceStatus.textContent = `На этом устройстве нет русского голоса — ${irina}`;
+  else if (!audio.synth) els.voiceStatus.textContent = "На этом устройстве нет озвучки. Напоминания будут на экране, с колокольчиком.";
   else if (!voices.length) els.voiceStatus.textContent = audio.synth.getVoices().length
-    ? (russian ? "Google русский, Microsoft Irina и Microsoft Pavel недоступны в этом браузере. Автоматический режим озвучит текст другим русским голосом."
-      : "В браузере нет русского голоса для озвучки. Ответы будут показаны текстом.")
-    : server ? "Браузер не предоставил голоса — ответы озвучивает сервер."
-      : "Браузер ещё не предоставил голоса. Попробуйте прослушать пример; выбор обновится автоматически.";
+    ? (russian ? "Автоматически ответы прочитает русский голос этого устройства."
+      : "На этом устройстве нет русского голоса. Ответы будут показаны текстом.")
+    : server ? `Голоса устройства ещё не загрузились — ${irina}`
+      : "Голоса ещё загружаются. Нажмите «Прослушать пример» — список обновится сам.";
   else els.voiceStatus.textContent = audioHelp;
+  showTechInfo();
 }
 
 function syncAudioSettings() {
@@ -226,6 +236,7 @@ function saveAudioSettings() {
     volume: Number(els.voiceVolume.value) / 100, bell: els.bellEnabled.checked, details: els.detailsEnabled.checked };
   store.set("audioSettings", state.audioSettings);
   syncAudioSettings();
+  showTechInfo();
 }
 
 function say(text, onEnd, parts = null) {
@@ -332,7 +343,7 @@ function startBrowserRecognition() {
     if (switchToServer) {
       state.browserSttFailed = true;
       showStatus();
-      showToast("Распознавание речи браузера недоступно — речь распознаёт сервер.");
+      showToast("Встроенное распознавание не сработало — дальше речь распознаёт ассистент.");
       return startRecording();
     }
     if (!finalSent && els.input.value.trim()) { finalSent = true; send(els.input.value, true); }
@@ -933,13 +944,49 @@ async function switchProfile(name) {
 
 /* ---------------------------------------------------------------- старт */
 
+const STT_HELP = {
+  auto: "Сначала речь распознаёт браузер — так точнее. Если не получится, распознает сам ассистент.",
+  browser: "Речь распознаёт браузер. Обычно это точнее, но работает не везде.",
+  server: "Речь распознаёт сам ассистент: работает в любом браузере, запись не уходит сторонним сервисам. "
+    + "Иногда ошибается чаще встроенного.",
+};
+
 function showStatus() {
   if (!state.status) return;
-  const nlu = state.status.llm_model ? `разбор запросов: ${state.status.llm_model} + правила` : "разбор запросов: правила";
-  const voice = useServerStt() ? "голос: сервер" : SR ? "голос: браузер" : "голос: недоступен в этом браузере";
-  els.status.textContent = `профиль: ${state.status.user} · ${nlu}, ${voice}`;
+  // под заголовком — только то, что важно пользователю; как всё устроено — в настройках, «Как это работает»
+  els.status.textContent = `профиль: ${state.status.user}` + (canListen() ? "" : " · голосовой ввод здесь недоступен");
   // выбор распознавания показываем, только если доступны оба варианта
-  if (els.sttField) els.sttField.hidden = !(SR && serverStt());
+  const choice = !!(SR && serverStt());
+  if (els.sttField) els.sttField.hidden = !choice;
+  els.sttHelp.hidden = !choice;
+  els.sttHelp.textContent = state.sttMode === "auto" && state.browserSttFailed
+    ? "Встроенное распознавание сейчас не работает — речь распознаёт ассистент."
+    : STT_HELP[state.sttMode];
+  showTechInfo();
+}
+
+function showTechInfo() {
+  if (!state.status || !els.techInfo) return;
+  const server = !!state.status.tts_server;
+  const piper = server && (state.audioSettings.voice === PlannerAudio.SERVER_VOICE || !audio.synth
+    || !audio.hasRussianVoice());
+  const rows = [
+    ["Понимание запросов", state.status.llm_model
+      ? `${state.status.llm_model} + правила. Простые команды правила разбирают сами, без LLM.` : "правила"],
+    ["Даты и время", "собственный разбор русских выражений; LLM даты не вычисляет"],
+    ["Распознавание речи", useServerStt() ? "Vosk на сервере (офлайн-модель)"
+      : SR ? "встроенное в браузер (Web Speech API)" : "недоступно в этом браузере"],
+    ["Озвучка", piper ? "Piper на сервере, голос «Ирина»"
+      : audio.synth ? "синтез речи устройства (Web Speech API)" : "недоступна в этом браузере"],
+    ["Поиск", "леммы pymorphy3, BM25, синонимы и нечёткое совпадение"],
+  ];
+  els.techInfo.replaceChildren(...rows.flatMap(([term, text]) => {
+    const dt = document.createElement("dt");
+    const dd = document.createElement("dd");
+    dt.textContent = term;
+    dd.textContent = text;
+    return [dt, dd];
+  }));
 }
 
 async function loadStatus() {

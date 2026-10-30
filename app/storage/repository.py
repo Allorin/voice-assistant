@@ -1,12 +1,12 @@
 """Репозиторий записей: единственное место, которое знает про SQL."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -291,6 +291,24 @@ class ItemRepository:
                 s.rollback()
                 return False
             return True
+
+    def rename_imported(self, fix: Callable[[str], str]) -> int:
+        """Переписать названия импортированных записей по fix во всех профилях. Возвращает число записей.
+
+        Названий в CSV несколько сотен, а записей — по тысяче на профиль, поэтому исправляется каждое
+        различное название одним UPDATE. Повторный запуск ничего не меняет.
+        """
+        changed = 0
+        with self._sf() as s:
+            titles = s.scalars(select(ItemRow.title).where(ItemRow.source == "import").distinct()).all()
+            for old in titles:
+                new = fix(old)
+                if new != old:
+                    res = s.execute(update(ItemRow).where(ItemRow.source == "import", ItemRow.title == old)
+                                    .values(title=new))
+                    changed += res.rowcount
+            s.commit()
+        return changed
 
     def count(self, user_id: str | None = None) -> int:
         with self._sf() as s:

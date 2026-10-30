@@ -12,6 +12,7 @@ from app.clock import Clock
 from app.config import Settings
 from app.dialog.manager import DialogManager
 from app.dialog.session import SessionStore
+from app.grammar import fix_cases
 from app.nlu.factory import create_llm
 from app.nlu.hybrid import HybridNLU
 from app.nlu.rules import RuleNLU
@@ -81,6 +82,10 @@ def build(settings: Settings, clock: Clock | None = None) -> Container:
     if repo.count(settings.default_user) == 0 and settings.seed_csv and Path(settings.seed_csv).exists():
         n = import_csv(repo, settings.seed_csv, settings.default_user, clock.now())
         log.info("Импортировано %s записей из %s", n, settings.seed_csv)
+    # базы, загруженные до исправления падежей («Позвонить Сергеем»), приводятся в порядок при старте
+    fixed = repo.rename_imported(fix_cases)
+    if fixed:
+        log.info("Исправлены падежи в %s импортированных записях", fixed)
 
     embedder = None
     if settings.embeddings_enabled:

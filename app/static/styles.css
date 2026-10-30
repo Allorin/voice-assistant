@@ -339,6 +339,16 @@ h2 { margin: 0 0 6px; font: 400 22px/1.2 var(--display); }
 .setting-check { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; font-size: 15px; }
 .setting-check input { width: 18px; height: 18px; flex: none; margin: 3px 0 0; accent-color: var(--accent); }
 .setting-help { margin: 8px 0 14px; color: var(--muted); font-size: 13px; }
+#sttHelp { margin-top: -8px; }
+.tech-info { margin: 4px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.tech-info summary { cursor: pointer; color: var(--ink); font-size: 14px; }
+.tech-info dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 10px 0 0; }
+.tech-info dt { color: var(--ink); }
+.tech-info dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .tech-info dl { grid-template-columns: 1fr; gap: 2px; }
+  .tech-info dd { margin-bottom: 8px; }
+}
 .preview-btn {
   width: 100%; padding: 12px; border: none;
   background: var(--accent); color: var(--accent-ink); font-weight: 500; cursor: pointer;

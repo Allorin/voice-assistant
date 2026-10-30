@@ -114,13 +114,14 @@
     </label>
     <label class="setting-field" id="sttField" for="sttMode" hidden>Распознавание речи
       <select id="sttMode">
-        <option value="auto">Автоматически · браузер, при сбое — сервер</option>
-        <option value="browser">Браузер</option>
-        <option value="server">Сервер (офлайн-модель Vosk)</option>
+        <option value="auto">Автоматически</option>
+        <option value="browser">Встроенное — точнее</option>
+        <option value="server">Распознавание ассистента — работает везде</option>
       </select>
     </label>
+    <p class="setting-help" id="sttHelp" hidden></p>
     <label class="setting-field" for="voiceSelect">Голос
-      <select id="voiceSelect"><option value="">Автоматически · русский голос</option></select>
+      <select id="voiceSelect"><option value="">Автоматически</option></select>
     </label>
     <label class="setting-field" for="voiceRate"><span>Скорость <output id="rateValue" for="voiceRate">1,05×</output></span>
       <input id="voiceRate" type="range" min="0.7" max="1.4" step="0.05" value="1.05">
@@ -128,12 +129,16 @@
     <label class="setting-field" for="voiceVolume"><span>Громкость <output id="volumeValue" for="voiceVolume">100%</output></span>
       <input id="voiceVolume" type="range" min="0" max="100" step="5" value="100">
     </label>
-    <p class="setting-help">Громкость звука также зависит от настроек браузера и Windows.</p>
+    <p class="setting-help">Громкость также зависит от громкости устройства.</p>
     <label class="setting-check"><input id="bellEnabled" type="checkbox" checked>Колокольчик перед напоминанием</label>
     <label class="setting-check"><input id="detailsEnabled" type="checkbox">Уточнять подробности при создании</label>
     <p class="setting-help">Ассистент предложит добавить подробности и выбрать, за сколько напомнить. Можно ответить «пропустить» или «сохранить».</p>
     <button class="preview-btn" id="voicePreview" type="button">Прослушать пример</button>
-    <p class="setting-help" id="voiceStatus" role="status">Настройки сохраняются в этом браузере. Для напоминаний держите страницу открытой.</p>
+    <p class="setting-help" id="voiceStatus" role="status">Настройки запоминаются на этом устройстве. Чтобы сработали напоминания, держите страницу открытой.</p>
+    <details class="tech-info">
+      <summary>Как это работает</summary>
+      <dl id="techInfo"></dl>
+    </details>
   </dialog>
   <dialog class="month" id="monthDialog" aria-labelledby="monthTitle">
     <header class="month-head">
